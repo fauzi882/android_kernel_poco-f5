@@ -890,7 +890,9 @@ jobs:
               cfg += [
                   "CONFIG_GNSS=y",
                   "CONFIG_GNSS_SERIAL=y",
-                  "CONFIG_QCOM_GENI_SE=y",
+                  # QCOM_GENI_SE harus =m bukan =y
+                  # kalau =y akan konflik dengan techpack module
+                  "# CONFIG_QCOM_GENI_SE is not set",
               ]
 
           # Dolby audio
