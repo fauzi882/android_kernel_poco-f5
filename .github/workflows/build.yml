@@ -885,6 +885,29 @@ jobs:
                   "CONFIG_DM_VERITY=y",
               ]
 
+          # RO/RW support configs
+          cfg += [
+              # Overlayfs - required for RW system overlay
+              "CONFIG_OVERLAY_FS=y",
+              "CONFIG_OVERLAY_FS_REDIRECT_DIR=y",
+              "CONFIG_OVERLAY_FS_REDIRECT_ALWAYS_FOLLOW=y",
+              "CONFIG_OVERLAY_FS_INDEX=y",
+              "CONFIG_OVERLAY_FS_XINO_AUTO=y",
+              "CONFIG_OVERLAY_FS_METACOPY=y",
+              # FUSE
+              "CONFIG_FUSE_FS=y",
+              "CONFIG_VIRTIO_FS=n",
+              # Tmpfs
+              "CONFIG_TMPFS=y",
+              "CONFIG_TMPFS_POSIX_ACL=y",
+              "CONFIG_TMPFS_XATTR=y",
+              # Filesystem remount
+              "# CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG is not set",
+              "# CONFIG_FS_VERITY_BUILTIN_SIGNATURES is not set",
+              # Block device RW
+              "CONFIG_BLK_DEV_WRITE_MOUNTED=y",
+          ]
+
           # GPS
           if gps == "true":
               cfg += [
@@ -1111,6 +1134,40 @@ jobs:
             echo mq-deadline > "$q/scheduler" 2>/dev/null || true
             echo 64 > "$q/read_ahead_kb" 2>/dev/null || true
             echo 0  > "$q/add_random" 2>/dev/null || true
+          done
+
+          # === RO/RW SUPPORT ===
+          # Disable dm-verity via cmdline (belt and suspenders)
+          resetprop -n ro.boot.veritymode disabled
+
+          # Remount system partitions RW
+          # kernel patches sudah handle bypass di:
+          # - fs/namespace.c      (MNT_LOCK_READONLY bypass)
+          # - fs/ext4/super.c     (ext4 remount bypass)
+          # - fs/overlayfs/super.c (overlay force readonly bypass)
+          # - security/selinux/hooks.c (SELinux bypass)
+          # - init/do_mounts.c    (default flags bypass)
+
+          for part in system vendor product system_ext odm; do
+            if mountpoint -q "/$part" 2>/dev/null; then
+              mount -o remount,rw "/$part" 2>/dev/null && \
+                log -t marble-rw "/$part remounted rw" || \
+                log -t marble-rw "/$part remount failed (may already be rw)"
+            fi
+          done
+
+          # Verify RW status
+          for part in system vendor product; do
+            if mountpoint -q "/$part" 2>/dev/null; then
+              RW=$(mount | grep " /$part " | grep -c "rw" || true)
+              if [ "$RW" -gt 0 ]; then
+                log -t marble-rw "/$part: RW OK"
+              else
+                log -t marble-rw "/$part: still RO - trying force"
+                blockdev --setrw $(mount | grep " /$part " | awk '{print $1}') 2>/dev/null || true
+                mount -o remount,rw "/$part" 2>/dev/null || true
+              fi
+            fi
           done
 
           # Dolby Atmos
