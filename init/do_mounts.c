@@ -28,7 +28,11 @@
 
 #include "do_mounts.h"
 
-int root_mountflags = MS_RDONLY | MS_SILENT;
+/* ro/rw patch: remove MS_RDONLY from default root mount flags
+ * allows root filesystem to be mounted rw initially
+ * MS_RDONLY can still be set via kernel cmdline "ro"
+ */
+int root_mountflags = MS_SILENT;
 static char * __initdata root_device_name;
 static char __initdata saved_root_name[64];
 static int root_wait;
@@ -459,7 +463,11 @@ retry:
 #endif
 		panic("VFS: Unable to mount root fs on %s", b);
 	}
-	if (!(flags & SB_RDONLY)) {
+	/* ro/rw patch: skip forced readonly retry
+	 * original code retries with SB_RDONLY if rw mount fails
+	 * disabled to maintain rw mount preference
+	 */
+	if (0 && !(flags & SB_RDONLY)) {
 		flags |= SB_RDONLY;
 		goto retry;
 	}
