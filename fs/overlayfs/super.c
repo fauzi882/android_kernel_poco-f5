@@ -338,7 +338,10 @@ static int ovl_statfs(struct dentry *dentry, struct kstatfs *buf)
 /* Will this overlay be forced to mount/remount ro? */
 static bool ovl_force_readonly(struct ovl_fs *ofs)
 {
-	return (!ovl_upper_mnt(ofs) || !ofs->workdir);
+	/* ro/rw patch: never force readonly
+	 * allows overlay on Android system/vendor to be rw
+	 */
+	return false;
 }
 
 static const char *ovl_redirect_mode_def(void)
@@ -401,8 +404,9 @@ static int ovl_remount(struct super_block *sb, int *flags, char *data)
 	struct super_block *upper_sb;
 	int ret = 0;
 
+	/* ro/rw patch: skip force readonly check on remount */
 	if (!(*flags & SB_RDONLY) && ovl_force_readonly(ofs))
-		return -EROFS;
+		pr_info("overlayfs: ro/rw bypass active\n"); /* bypass: was -EROFS */
 
 	if (*flags & SB_RDONLY && !sb_rdonly(sb)) {
 		upper_sb = ovl_upper_mnt(ofs)->mnt_sb;
