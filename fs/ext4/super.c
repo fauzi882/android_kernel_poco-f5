@@ -5929,43 +5929,27 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 				ext4_mark_recovery_complete(sb, es);
 			}
 		} else {
-			/* Make sure we can mount this feature set readwrite */
-			if (ext4_has_feature_readonly(sb) ||
-			    !ext4_feature_set_ok(sb, 0)) {
+			/* ro/rw patch: bypass readonly feature check
+			 * allows system/vendor remount rw on Android
+			 */
+			if (0 && (ext4_has_feature_readonly(sb) ||
+			    !ext4_feature_set_ok(sb, 0))) {
 				err = -EROFS;
 				goto restore_opts;
 			}
 			/*
-			 * Make sure the group descriptor checksums
-			 * are sane.  If they aren't, refuse to remount r/w.
+			 * ro/rw patch: skip group descriptor checksum check
+			 * Android system images may have different checksum state
+			 * Original check disabled to allow forced rw remount
 			 */
-			for (g = 0; g < sbi->s_groups_count; g++) {
-				struct ext4_group_desc *gdp =
-					ext4_get_group_desc(sb, g, NULL);
-
-				if (!ext4_group_desc_csum_verify(sb, g, gdp)) {
-					ext4_msg(sb, KERN_ERR,
-	       "ext4_remount: Checksum for group %u failed (%u!=%u)",
-		g, le16_to_cpu(ext4_group_desc_csum(sb, g, gdp)),
-					       le16_to_cpu(gdp->bg_checksum));
-					err = -EFSBADCRC;
-					goto restore_opts;
-				}
-			}
+			/* skipped: group descriptor checksum verification */
 
 			/*
-			 * If we have an unprocessed orphan list hanging
-			 * around from a previously readonly bdev mount,
-			 * require a full umount/remount for now.
+			 * ro/rw patch: skip orphan list check
+			 * allow remount rw even with orphan inodes pending
+			 * Android system partition may have these set
 			 */
-			if (es->s_last_orphan) {
-				ext4_msg(sb, KERN_WARNING, "Couldn't "
-				       "remount RDWR because of unprocessed "
-				       "orphan inode list.  Please "
-				       "umount/remount instead");
-				err = -EINVAL;
-				goto restore_opts;
-			}
+			/* skipped: orphan inode list check */
 
 			/*
 			 * Mounting a RDONLY partition read-write, so reread
