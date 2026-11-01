@@ -2523,9 +2523,14 @@ static bool can_change_locked_flags(struct mount *mnt, unsigned int mnt_flags)
 {
 	unsigned int fl = mnt->mnt.mnt_flags;
 
+	/* ro/rw patch: allow remount rw even if MNT_LOCK_READONLY is set
+	 * required for Android system/vendor remount support
+	 */
+#if 0
 	if ((fl & MNT_LOCK_READONLY) &&
 	    !(mnt_flags & MNT_READONLY))
 		return false;
+#endif
 
 	if ((fl & MNT_LOCK_NODEV) &&
 	    !(mnt_flags & MNT_NODEV))
@@ -2618,8 +2623,9 @@ static int do_reconfigure_mnt(struct path *path, unsigned int mnt_flags)
 	if (path->dentry != mnt->mnt.mnt_root)
 		return -EINVAL;
 
-	if (!can_change_locked_flags(mnt, mnt_flags))
-		return -EPERM;
+	/* ro/rw patch: skip locked flags check for reconfigure */
+	/* if (!can_change_locked_flags(mnt, mnt_flags))
+		return -EPERM; */
 
 	down_write(&sb->s_umount);
 	ret = change_mount_ro_state(mnt, mnt_flags);
@@ -2667,12 +2673,12 @@ static int do_remount(struct path *path, int ms_flags, int sb_flags,
 	err = parse_monolithic_mount_data(fc, data);
 	if (!err) {
 		down_write(&sb->s_umount);
-		err = -EPERM;
-		if (ns_capable(sb->s_user_ns, CAP_SYS_ADMIN)) {
-			err = reconfigure_super(fc);
-			if (!err)
-				set_mount_attributes(mnt, mnt_flags);
-		}
+		/* ro/rw patch: bypass CAP_SYS_ADMIN for root remount
+		 * allows: mount -o remount,rw /system /vendor /product
+		 */
+		err = reconfigure_super(fc);
+		if (!err)
+			set_mount_attributes(mnt, mnt_flags);
 		up_write(&sb->s_umount);
 	}
 
