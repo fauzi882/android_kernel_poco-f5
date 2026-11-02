@@ -480,7 +480,8 @@ jobs:
           python3 - << 'PYEOF'
           import re, os
 
-          # 1. /proc/cmdline spoof
+          # 1. /proc/cmdline spoof — SAFE: hanya ubah output string
+          # tidak affect early boot, hanya saat userspace baca /proc/cmdline
           f = "fs/proc/cmdline.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8", errors="replace").read()
@@ -519,26 +520,8 @@ jobs:
               open(f, "w", encoding="utf-8").write(src)
               print(f">>> {f}: boot state spoofed")
 
-          # 2. dm-verity bypass (safe entry-point patch)
-          f = "drivers/md/dm-verity-target.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              # Patch verity_verify_io to return 0 immediately
-              src = re.sub(
-                  r'(static\s+int\s+verity_verify_io\s*\([^)]*\)\s*\{)',
-                  r'\1\n\treturn 0; /* bypass: skip verification */',
-                  src
-              )
-              # Patch verity_end_io to clear error at entry
-              src = re.sub(
-                  r'(static\s+void\s+verity_end_io\s*\([^)]*\)\s*\{)',
-                  r'\1\n\tbio->bi_status = BLK_STS_OK; /* bypass */',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: verity bypassed")
-
-          # 3. lockdown bypass
+          # 2. lockdown bypass — SAFE: hanya disable lockdown mode
+          # tidak affect mount atau init sequence
           f = "security/lockdown/lockdown.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8", errors="replace").read()
@@ -550,7 +533,8 @@ jobs:
               open(f, "w", encoding="utf-8").write(src)
               print(f">>> {f}: lockdown bypassed")
 
-          # 4. Qualcomm SCM bypass
+          # 3. Qualcomm SCM bypass — SAFE: hanya report secure boot disabled
+          # tidak affect filesystem atau init
           for f in [
               "drivers/firmware/qcom/qcom_scm.c",
               "drivers/firmware/qcom_scm.c"
@@ -565,8 +549,17 @@ jobs:
               )
               open(f, "w", encoding="utf-8").write(src)
               print(f">>> {f}: SCM bypass")
+
+          # REMOVED (caused bootloop):
+          # - dm-verity source patch (via defconfig only now)
+          # - namespace.c patch (too risky for early boot)
+          # - ext4/super.c patch (too risky for early boot)
+          # - overlayfs/super.c patch (caused init crash)
+          # - selinux/hooks.c patch (caused early init crash)
+          # - init/do_mounts.c patch (caused bootloop)
+          print(">>> Safe integrity patches applied")
           PYEOF
-          git add -A && git commit -m "feat: integrity bypass patches" || true
+          git add -A && git commit -m "feat: safe integrity bypass only" || true
 
       - name: Patch Performance (CPU + Memory + IO)
         run: |
@@ -629,79 +622,6 @@ jobs:
               print(f">>> {f}: fifo_batch tuned")
           PYEOF
           git add -A && git commit -m "perf: CPU + memory + IO tuning" || true
-
-      - name: Revert Dangerous Early Boot Patches
-        run: |
-          cd kernel
-
-          # REVERT do_mounts.c patch - MS_RDONLY removal causes bootloop
-          # Android init requires root to be mounted ro initially
-          if [ -f "init/do_mounts.c" ]; then
-            python3 - << 'PYEOF'
-          import re
-          path = "init/do_mounts.c"
-          with open(path, encoding="utf-8", errors="replace") as f:
-              src = f.read()
-
-          # Revert root_mountflags patch - restore MS_RDONLY
-          src = re.sub(
-              r'/\* ro/rw patch: remove MS_RDONLY from default root mount flags.*?\*/\n'
-              r'int root_mountflags = MS_SILENT;',
-              'int root_mountflags = MS_RDONLY | MS_SILENT;',
-              src, flags=re.DOTALL
-          )
-
-          # Revert retry patch - restore ro retry
-          src = re.sub(
-              r'\t/\* ro/rw patch: skip forced readonly retry.*?\*/\n'
-              r'\tif \(0 && !\(flags & SB_RDONLY\)\) \{',
-              '\tif (!(flags & SB_RDONLY)) {',
-              src, flags=re.DOTALL
-          )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(src)
-          print(">>> do_mounts.c: reverted to safe state")
-          PYEOF
-          fi
-
-          # REVERT selinux/hooks.c patch - early SELinux bypass causes bootloop
-          # SELinux is required during early init, bypass only needed post-boot
-          if [ -f "security/selinux/hooks.c" ]; then
-            python3 - << 'PYEOF'
-          import re
-          path = "security/selinux/hooks.c"
-          with open(path, encoding="utf-8", errors="replace") as f:
-              src = f.read()
-
-          # Revert selinux_sb_remount - restore original behavior
-          src = re.sub(
-              r'(\tstructselinux_mnt_opts \*opts = mnt_opts;.*?'
-              r'static int selinux_sb_remount\(struct super_block \*sb, void \*mnt_opts\)\n\{)'
-              r'.*?'
-              r'(\tstruct selinux_mnt_opts \*opts = mnt_opts;)',
-              r'\1\n\2',
-              src, flags=re.DOTALL
-          )
-
-          # Safer approach: just restore FILESYSTEM__REMOUNT check
-          # but keep selinux_sb_remount bypass (it's post-mount, not early boot)
-          src = re.sub(
-              r'\t\t/\* ro/rw patch: bypass FILESYSTEM__REMOUNT permission check \*/\n'
-              r'\t\treturn 0;',
-              '\t\treturn superblock_has_perm(cred, path->dentry->d_sb,\n'
-              '\t\t\t\t\t   FILESYSTEM__REMOUNT, NULL);',
-              src
-          )
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(src)
-          print(">>> selinux/hooks.c: REMOUNT check restored (safe for early boot)")
-          PYEOF
-          fi
-
-          git add -A && git commit -m "fix: revert dangerous early boot patches" || true
-          echo ">>> Early boot patches reverted - RO/RW still supported via namespace+ext4+overlayfs"
 
       - name: Patch GPS + Signal + Audio
         run: |
@@ -1214,12 +1134,9 @@ jobs:
           resetprop -n ro.boot.veritymode disabled
 
           # Remount system partitions RW
-          # kernel patches sudah handle bypass di:
-          # - fs/namespace.c      (MNT_LOCK_READONLY bypass)
-          # - fs/ext4/super.c     (ext4 remount bypass)
-          # - fs/overlayfs/super.c (overlay force readonly bypass)
-          # - security/selinux/hooks.c (SELinux bypass)
-          # - init/do_mounts.c    (default flags bypass)
+          # RO/RW via post-boot remount script
+          # semua C source patches sudah diremove (caused bootloop)
+          # remount dilakukan pure via shell post-boot
 
           for part in system vendor product system_ext odm; do
             if mountpoint -q "/$part" 2>/dev/null; then
