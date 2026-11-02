@@ -1,4 +1,4 @@
-name: Build Marble Kernel (Fork)
+name: Build Marble Kernel (Minimal - BakaSU + SuSFS Only)
 
 on:
   workflow_dispatch:
@@ -16,89 +16,22 @@ on:
         options:
           - 'true'
           - 'false'
-      security_level:
-        description: 'Level Keamanan'
-        required: true
-        default: 'maximum_stealth'
-        type: choice
-        options:
-          - maximum_stealth
-          - standard_secure
-      tcp_profile:
-        description: 'TCP Profile'
-        required: true
-        default: 'bbr_tuned'
-        type: choice
-        options:
-          - bbr_tuned
-          - bbr_stock
-      cpu_governor:
-        description: 'CPU Governor Default'
-        required: true
-        default: 'schedutil'
-        type: choice
-        options:
-          - schedutil
-          - performance
-          - conservative
-      enable_dolby:
-        description: 'Enable Dolby Atmos'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      enable_gps:
-        description: 'Enable GPS Fix'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      enable_signal:
-        description: 'Enable Signal Boost'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      enable_bypass:
-        description: 'Enable Integrity Bypass'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      enable_full_security:
-        description: 'Enable Full Security Stack'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
 
 permissions:
   contents: read
 
 env:
-  # Clone dari fork lu langsung — bukan upstream
   KERNEL_REPO: "https://github.com/fauzi882/android_kernel_poco-f5.git"
   KERNEL_BRANCH: "melt-rebase"
   AK3_REPO: "https://github.com/osm0sis/AnyKernel3.git"
   SUSFS_REPO: "https://gitlab.com/simonpunk/susfs4ksu.git"
   SUSFS_BRANCH: "gki-android12-5.10"
   CLANG_URL: "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r536225.tar.gz"
-  ARCH: "arm64"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
+    timeout-minutes: 180
 
     steps:
       - name: Free Disk Space
@@ -121,15 +54,11 @@ jobs:
         run: |
           mkdir -p "$HOME/toolchains/clang"
           OK=false
-
-          # Source 1: googlesource
           wget -q --timeout=120 --tries=2 \
             -O /tmp/clang.tar.gz "${{ env.CLANG_URL }}" 2>/dev/null \
             && tar -xzf /tmp/clang.tar.gz -C "$HOME/toolchains/clang" 2>/dev/null \
             && OK=true || true
           rm -f /tmp/clang.tar.gz
-
-          # Source 2: ZyCromerZ
           if [ "$OK" = "false" ]; then
             ZYC="https://github.com/ZyCromerZ/Clang/releases/download/18.0.0git-20240302-release/Clang-18.0.0git-20240302.tar.gz"
             wget -q --timeout=180 --tries=2 -O /tmp/clang.tar.gz "$ZYC" 2>/dev/null \
@@ -137,8 +66,6 @@ jobs:
               && OK=true || true
             rm -f /tmp/clang.tar.gz
           fi
-
-          # Source 3: apt fallback
           if [ "$OK" = "false" ]; then
             wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
               | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
@@ -153,22 +80,18 @@ jobs:
                 && ln -sf "$(command -v ${t}-17)" \
                    "$HOME/toolchains/clang/bin/${t}" || true
             done
-            OK=true
           fi
-
           echo "$HOME/toolchains/clang/bin" >> $GITHUB_PATH
           clang --version || true
 
-      - name: Clone Kernel (Fork)
+      - name: Clone Kernel
         run: |
-          echo ">>> Cloning fork: ${{ env.KERNEL_REPO }}"
           git clone --depth=1 \
             -b "${{ env.KERNEL_BRANCH }}" \
             "${{ env.KERNEL_REPO }}" kernel
           cd kernel
           git config user.name "build-user"
           git config user.email "build-user@android"
-          echo ">>> Kernel source ready"
           echo ">>> Branch: $(git branch --show-current)"
           echo ">>> Commit: $(git log --oneline -1)"
 
@@ -178,28 +101,22 @@ jobs:
           git clone --depth=1 \
             -b "${{ env.SUSFS_BRANCH }}" \
             "${{ env.SUSFS_REPO }}" susfs4ksu
-          echo ">>> SuSFS ready"
 
       - name: Integrate BakaSU
         run: |
           cd kernel
-
-          # Bersihkan KSU lama kalau ada
           rm -rf KernelSU drivers/kernelsu
           sed -i '/kernelsu/d' drivers/Makefile drivers/Kconfig 2>/dev/null || true
           git add -A && git commit -m "clean: remove old KSU" || true
 
-          # Install BakaSU
-          echo ">>> Installing BakaSU..."
           curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" \
             | bash -s main \
             || curl -LSs "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" \
             | bash
 
           [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ] \
-            || { echo "ERROR: BakaSU install failed"; exit 1; }
+            || { echo "ERROR: BakaSU failed"; exit 1; }
 
-          # Checkout latest
           if [ -d "KernelSU" ]; then
             cd KernelSU
             git config user.name "build-user"
@@ -212,16 +129,13 @@ jobs:
             [ -n "$REF" ] && git checkout -f "$REF" || true
             cd ..
           fi
-
           git add -A && git commit -m "feat: add BakaSU" || true
-          echo ">>> BakaSU integrated"
 
       - name: Sync BakaSU Version
         run: |
           cd kernel
           VER="${{ github.event.inputs.ksu_version }}"
           [ "$VER" = "auto" ] || [ -z "$VER" ] && VER="35252"
-          echo ">>> Target version: $VER"
           for d in KernelSU drivers/kernelsu; do
             [ -d "$d" ] || continue
             find "$d" -maxdepth 3 \
@@ -242,14 +156,12 @@ jobs:
           [ -d "../susfs4ksu" ] || {
             echo "SUSFS_APPLIED=false" >> $GITHUB_ENV; exit 0
           }
-
           cp -rv ../susfs4ksu/kernel_patches/fs/* fs/ 2>/dev/null || true
           cp -rv ../susfs4ksu/kernel_patches/include/linux/* \
             include/linux/ 2>/dev/null || true
-
           PF="../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch"
           if [ -f "$PF" ]; then
-            if patch -p1 --dry-run < "$PF" >/dev/null 2>&1; then
+            if   patch -p1 --dry-run          < "$PF" >/dev/null 2>&1; then
               patch -p1 --forward < "$PF" && SUSFS_OK=true
             elif patch -p1 --dry-run --fuzz=1 < "$PF" >/dev/null 2>&1; then
               patch -p1 --forward --fuzz=1 < "$PF" && SUSFS_OK=true
@@ -257,17 +169,10 @@ jobs:
               git apply --3way "$PF" && SUSFS_OK=true
             fi
           fi
-
-          if [ "$SUSFS_OK" = "true" ]; then
-            find KernelSU drivers/kernelsu \
-              \( -name "Makefile" -o -name "Kbuild" \) 2>/dev/null \
-              | xargs -I{} sed -i 's/\$(error /\$(warning /g' {} || true
+          [ "$SUSFS_OK" = "true" ] && \
             git add -A && git commit -m "feat: add SuSFS" || true
-            echo ">>> SuSFS applied"
-          else
-            echo ">>> SuSFS failed - continuing without it"
-          fi
           echo "SUSFS_APPLIED=$SUSFS_OK" >> $GITHUB_ENV
+          echo ">>> SuSFS: $SUSFS_OK"
 
       - name: Fix Extern Declarations
         run: |
@@ -288,7 +193,6 @@ jobs:
               "security/selinux/hooks.c",
               "security/selinux/selinuxfs.c",
           ]
-
           def find_sig(fn):
               dr = re.compile(
                   r'(?:^|\n)[ \t]*(void|int|long)\s*\*?\s*'
@@ -298,8 +202,7 @@ jobs:
               for root, dirs, files in os.walk("."):
                   dirs[:] = [d for d in dirs if d not in [".git", "out"]]
                   for f in files:
-                      if not f.endswith((".c", ".h")):
-                          continue
+                      if not f.endswith((".c", ".h")): continue
                       fp = os.path.join(root, f)
                       if os.path.abspath(fp) == os.path.abspath("fs/exec.c"):
                           continue
@@ -308,24 +211,18 @@ jobs:
                       except Exception:
                           continue
                       m = dr.search(src)
-                      if m:
-                          return (m.group(1), m.group(2), fp)
+                      if m: return (m.group(1), m.group(2), fp)
               return None
-
           if os.path.isfile("fs/exec.c"):
               with open("fs/exec.c", encoding="utf-8", errors="replace") as f:
                   raw = f.read()
               lines = raw.splitlines(keepends=True)
-              out = []
-              i = 0
+              out = []; i = 0
               while i < len(lines):
                   ln = lines[i]
-                  if any(b in ln for b in BAD):
-                      i += 1
-                      continue
+                  if any(b in ln for b in BAD): i += 1; continue
                   if re.search(
-                      r'(__attribute__\s*\(\s*\(weak\)\s*\)|__weak)\s[\w\s\*]*ksu_',
-                      ln
+                      r'(__attribute__\s*\(\s*\(weak\)\s*\)|__weak)\s[\w\s\*]*ksu_', ln
                   ):
                       if "{" in ln:
                           d = ln.count("{") - ln.count("}")
@@ -333,16 +230,14 @@ jobs:
                           while i < len(lines) and d > 0:
                               d += lines[i].count("{") - lines[i].count("}")
                               i += 1
-                      else:
-                          i += 1
+                      else: i += 1
                       continue
                   bad = any(
                       fn in ln and re.search(r'\b(extern|static)\b', ln)
                       for fn in KSU_FUNCS
                   )
                   if bad:
-                      if ";" in ln or ("{" in ln and "}" in ln):
-                          i += 1
+                      if ";" in ln or ("{" in ln and "}" in ln): i += 1
                       elif "{" in ln:
                           d = ln.count("{") - ln.count("}")
                           i += 1
@@ -351,350 +246,45 @@ jobs:
                               i += 1
                       else:
                           i += 1
-                          while i < len(lines) and ";" not in lines[i]:
-                              i += 1
+                          while i < len(lines) and ";" not in lines[i]: i += 1
                           i += 1
                       continue
-                  out.append(ln)
-                  i += 1
-
+                  out.append(ln); i += 1
               content = "".join(out)
               injs = []
               for fn, rd in KSU_FUNCS.items():
-                  if not re.search(r'\b' + fn + r'\s*\(', content):
-                      continue
+                  if not re.search(r'\b' + fn + r'\s*\(', content): continue
                   r = find_sig(fn)
-                  decl = (
-                      f"extern {r[0]} {fn}({r[1]});\n"
-                      if r else
-                      f"extern {rd} {fn}();\n"
-                  )
+                  decl = (f"extern {r[0]} {fn}({r[1]});\n" if r
+                          else f"extern {rd} {fn}();\n")
                   injs.append(decl)
-
               if injs:
                   ls = content.split("\n")
                   li = max(
                       (i for i, l in enumerate(ls)
-                       if l.strip().startswith("#include")),
-                      default=-1
+                       if l.strip().startswith("#include")), default=-1
                   )
                   if li >= 0:
-                      ls.insert(
-                          li + 1,
-                          "\n/* KSU decls (auto) */\n" + "".join(injs)
-                      )
+                      ls.insert(li+1, "\n/* KSU decls */\n" + "".join(injs))
                       content = "\n".join(ls)
-
               open("fs/exec.c", "w", encoding="utf-8").write(content)
               print(">>> fs/exec.c: patched")
-
           for sf in SEFILES:
-              if not os.path.isfile(sf):
-                  continue
+              if not os.path.isfile(sf): continue
               src = open(sf, encoding="utf-8", errors="replace").read()
               for b in BAD:
                   src = re.sub(r'/\*[^*]*' + re.escape(b) + r'[^*]*\*/', '', src)
               src = re.sub(
-                  r'__attribute__\s*\(\s*\(weak\)\s*\)\s[\w\s\*]*ksu_[^\n]*\n',
-                  '',
-                  src
+                  r'__attribute__\s*\(\s*\(weak\)\s*\)\s[\w\s\*]*ksu_[^\n]*\n', '', src
               )
               open(sf, "w", encoding="utf-8").write(src)
               print(f">>> {sf}: cleaned")
           PYEOF
           git add -A && git commit -m "fix: clean extern declarations" || true
 
-      - name: Patch BBR (Tune Parameters)
+      - name: Configure Defconfig (Minimal)
         run: |
           cd kernel
-          if [ -f "net/ipv4/tcp_bbr.c" ]; then
-            python3 - << 'PYEOF'
-          import re
-          path = "net/ipv4/tcp_bbr.c"
-          with open(path, encoding="utf-8") as f:
-              src = f.read()
-
-          # Tune BBR params
-          src = src.replace(
-              "bbr_min_rtt_win_sec = 10",
-              "bbr_min_rtt_win_sec = 5"
-          )
-          src = src.replace(
-              "bbr_probe_rtt_mode_ms = 200",
-              "bbr_probe_rtt_mode_ms = 100"
-          )
-
-          # Add BBR2 alias by injecting into existing struct registration
-          if "bbr2" not in src:
-              # Find existing ops struct, copy it with name "bbr2"
-              m = re.search(
-                  r'(static\s+struct\s+tcp_congestion_ops\s+'
-                  r'tcp_bbr_cong_ops\s*[^=]*=\s*\{)([^}]+)(\})',
-                  src, re.DOTALL
-              )
-              if m:
-                  fields = m.group(2)
-                  fields_bbr2 = re.sub(
-                      r'(\.name\s*=\s*)"bbr"',
-                      r'\1"bbr2"',
-                      fields
-                  )
-                  bbr2_struct = (
-                      "\n/* BBR2: alias of BBR with enhanced name */\n"
-                      f"static struct tcp_congestion_ops tcp_bbr2_ops"
-                      f" __read_mostly = {{{fields_bbr2}}};\n"
-                  )
-                  # Inject before module_init
-                  src = re.sub(
-                      r'(static\s+int\s+__init\s+bbr_register)',
-                      bbr2_struct + r'\1',
-                      src
-                  )
-                  # Register bbr2 in same module_init
-                  src = re.sub(
-                      r'(return\s+tcp_register_congestion_control'
-                      r'\s*\(&tcp_bbr_cong_ops\s*\)\s*;)',
-                      r'tcp_register_congestion_control(&tcp_bbr2_ops);\n\t\1',
-                      src
-                  )
-                  # Unregister bbr2 in module_exit
-                  src = re.sub(
-                      r'(tcp_unregister_congestion_control'
-                      r'\s*\(&tcp_bbr_cong_ops\s*\)\s*;)',
-                      r'\1\n\ttcp_unregister_congestion_control(&tcp_bbr2_ops);',
-                      src
-                  )
-                  print(">>> BBR2 alias added inside tcp_bbr.c")
-
-          with open(path, "w", encoding="utf-8") as f:
-              f.write(src)
-          print(">>> BBR tuned")
-          PYEOF
-          fi
-          git add -A && git commit -m "feat: BBR tune + BBR2 alias" || true
-
-      - name: Patch Integrity Bypass
-        if: ${{ github.event.inputs.enable_bypass == 'true' }}
-        run: |
-          cd kernel
-          python3 - << 'PYEOF'
-          import re, os
-
-          # 1. /proc/cmdline spoof — SAFE: hanya ubah output string
-          # tidak affect early boot, hanya saat userspace baca /proc/cmdline
-          f = "fs/proc/cmdline.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              spoof = r"""
-          static char *spoof_cmdline(const char *o)
-          {
-              static char b[4096];
-              char *p;
-              strncpy(b, o, sizeof(b) - 1);
-              b[sizeof(b) - 1] = '\0';
-              p = strstr(b, "androidboot.verifiedbootstate=orange");
-              if (p) memcpy(p, "androidboot.verifiedbootstate=green ", 36);
-              p = strstr(b, "androidboot.verifiedbootstate=red   ");
-              if (p) memcpy(p, "androidboot.verifiedbootstate=green ", 36);
-              p = strstr(b, "androidboot.vbmeta.device_state=unlocked");
-              if (p) memcpy(p + 31, "locked  ", 8);
-              p = strstr(b, "androidboot.flash.locked=0");
-              if (p) p[25] = '1';
-              return b;
-          }
-          """
-              if "spoof_cmdline" not in src:
-                  ls = src.split("\n")
-                  li = max(
-                      (i for i, l in enumerate(ls)
-                       if l.strip().startswith("#include")),
-                      default=0
-                  )
-                  ls.insert(li + 1, spoof)
-                  src = "\n".join(ls)
-              src = re.sub(
-                  r'seq_puts\(m,\s*saved_command_line\)',
-                  'seq_puts(m, spoof_cmdline(saved_command_line))',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: boot state spoofed")
-
-          # 2. lockdown bypass — SAFE: hanya disable lockdown mode
-          # tidak affect mount atau init sequence
-          f = "security/lockdown/lockdown.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              src = re.sub(
-                  r'(static\s+int\s+lockdown_is_locked_down\s*\([^)]*\)\s*\{)',
-                  r'\1\n\treturn 0; /* bypass */',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: lockdown bypassed")
-
-          # 3. Qualcomm SCM bypass — SAFE: hanya report secure boot disabled
-          # tidak affect filesystem atau init
-          for f in [
-              "drivers/firmware/qcom/qcom_scm.c",
-              "drivers/firmware/qcom_scm.c"
-          ]:
-              if not os.path.isfile(f):
-                  continue
-              src = open(f, encoding="utf-8", errors="replace").read()
-              src = re.sub(
-                  r'(int\s+qcom_scm_is_secure_boot_enabled\s*\([^)]*\)\s*\{)',
-                  r'\1\n\treturn 0; /* bypass */',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: SCM bypass")
-
-          # REMOVED (caused bootloop):
-          # - dm-verity source patch (via defconfig only now)
-          # - namespace.c patch (too risky for early boot)
-          # - ext4/super.c patch (too risky for early boot)
-          # - overlayfs/super.c patch (caused init crash)
-          # - selinux/hooks.c patch (caused early init crash)
-          # - init/do_mounts.c patch (caused bootloop)
-          print(">>> Safe integrity patches applied")
-          PYEOF
-          git add -A && git commit -m "feat: safe integrity bypass only" || true
-
-      - name: Patch Performance (CPU + Memory + IO)
-        run: |
-          cd kernel
-          python3 - << 'PYEOF'
-          import re, os
-
-          # schedutil: tune rate limits safely
-          f = "kernel/sched/cpufreq_schedutil.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              # Only patch initializer assignments, not macro/attribute lines
-              src = re.sub(
-                  r'(?<!ATTR)(?<!RW)(up_rate_limit_us\s*=\s*)(\d+)(\s*[;,])',
-                  r'\g<1>500\3',
-                  src
-              )
-              src = re.sub(
-                  r'(?<!ATTR)(?<!RW)(down_rate_limit_us\s*=\s*)(\d+)(\s*[;,])',
-                  r'\g<1>2000\3',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: schedutil tuned")
-
-          # fair.c: reduce sched latency
-          f = "kernel/sched/fair.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              src = re.sub(
-                  r'(sched_latency_ns\s*=\s*)6000000ULL',
-                  r'\g<1>4000000ULL',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: latency tuned")
-
-          # vmscan: tune swappiness
-          f = "mm/vmscan.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              src = re.sub(
-                  r'(vm_swappiness\s*=\s*)60(\s*[;,])',
-                  r'\g<1>100\2',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: swappiness tuned")
-
-          # mq-deadline: tune fifo_batch
-          f = "block/mq-deadline.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              src = re.sub(
-                  r'(dd->fifo_batch\s*=\s*)\d+(\s*[;,])',
-                  r'\g<1>8\2',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: fifo_batch tuned")
-          PYEOF
-          git add -A && git commit -m "perf: CPU + memory + IO tuning" || true
-
-      - name: Patch GPS + Signal + Audio
-        run: |
-          cd kernel
-          python3 - \
-            "${{ github.event.inputs.enable_gps }}" \
-            "${{ github.event.inputs.enable_signal }}" \
-            "${{ github.event.inputs.enable_dolby }}" \
-            << 'PYEOF'
-          import re, os, sys
-          do_gps    = sys.argv[1] == "true"
-          do_signal = sys.argv[2] == "true"
-          do_dolby  = sys.argv[3] == "true"
-
-          # GPS: tune UART timeout
-          if do_gps:
-              for f in [
-                  "drivers/tty/serial/msm_geni_serial.c",
-                  "drivers/tty/serial/qcom_geni_serial.c",
-                  "drivers/gnss/gnss_serial.c",
-              ]:
-                  if not os.path.isfile(f):
-                      continue
-                  src = open(f, encoding="utf-8", errors="replace").read()
-                  def safe_to(m):
-                      v = int(m.group(1))
-                      return f"msecs_to_jiffies(500)" if v < 200 else m.group(0)
-                  src = re.sub(r'msecs_to_jiffies\((\d+)\)', safe_to, src)
-                  open(f, "w", encoding="utf-8").write(src)
-                  print(f">>> GPS: {f} tuned")
-
-          # Signal: tune WiFi TX power
-          if do_signal:
-              for f in [
-                  "drivers/net/wireless/ath/ath11k/mac.c",
-                  "drivers/net/wireless/ath/ath10k/mac.c",
-              ]:
-                  if not os.path.isfile(f):
-                      continue
-                  src = open(f, encoding="utf-8", errors="replace").read()
-                  src = re.sub(
-                      r'(#define\s+ATH_MAX_POWER_LEVEL\s+)\d+',
-                      r'\g<1>60',
-                      src
-                  )
-                  open(f, "w", encoding="utf-8").write(src)
-                  print(f">>> Signal: {f} tuned")
-
-          # Dolby: tune QDSP6 timeout
-          if do_dolby:
-              for f in [
-                  "sound/soc/qcom/qdsp6/q6asm.c",
-                  "sound/soc/qcom/qdsp6/q6afe.c",
-              ]:
-                  if not os.path.isfile(f):
-                      continue
-                  src = open(f, encoding="utf-8", errors="replace").read()
-                  src = re.sub(
-                      r'(#define\s+\w*TIMEOUT\w*\s+)(\d+)',
-                      lambda m: m.group(1) + "5000"
-                      if int(m.group(2)) < 5000 else m.group(0),
-                      src
-                  )
-                  open(f, "w", encoding="utf-8").write(src)
-                  print(f">>> Dolby: {f} tuned")
-          PYEOF
-          git add -A && git commit -m "feat: GPS + signal + audio patches" || true
-
-      - name: Configure Defconfig
-        run: |
-          cd kernel
-
-          # Detect defconfig
           if [ -f "arch/arm64/configs/marble_defconfig" ]; then
             DC="marble_defconfig"
             DF="arch/arm64/configs/marble_defconfig"
@@ -706,285 +296,63 @@ jobs:
             DF="arch/arm64/configs/gki_defconfig"
           fi
           echo "TARGET_DEFCONFIG=$DC" >> $GITHUB_ENV
-          echo ">>> Using defconfig: $DC"
 
-          python3 - \
-            "$DF" \
-            "${{ env.SUSFS_APPLIED }}" \
-            "${{ github.event.inputs.security_level }}" \
-            "${{ github.event.inputs.cpu_governor }}" \
-            "${{ github.event.inputs.enable_full_security }}" \
-            "${{ github.event.inputs.enable_bypass }}" \
-            "${{ github.event.inputs.enable_dolby }}" \
-            "${{ github.event.inputs.enable_gps }}" \
-            << 'PYEOF'
-          import sys
-          df         = sys.argv[1]
-          susfs_ok   = sys.argv[2]
-          sec_level  = sys.argv[3]
-          cpu_gov    = sys.argv[4]
-          full_sec   = sys.argv[5]
-          bypass     = sys.argv[6]
-          dolby      = sys.argv[7]
-          gps        = sys.argv[8]
+          # MINIMAL — hanya yang dibutuhkan BakaSU + SuSFS
+          cat >> "$DF" << 'CFGEOF'
 
-          cfg = [
-              # KSU + Kprobes
-              "CONFIG_WERROR=n",
-              "CONFIG_KSU=y",
-              "CONFIG_KPROBES=y",
-              "CONFIG_HAVE_KPROBES=y",
-              "CONFIG_KPROBE_EVENTS=y",
-              # TCP + Network
-              "CONFIG_TCP_CONG_ADVANCED=y",
-              "CONFIG_TCP_CONG_BBR=y",
-              "CONFIG_TCP_CONG_CUBIC=y",
-              'CONFIG_DEFAULT_TCP_CONG="bbr"',
-              "CONFIG_NET_SCH_FQ=y",
-              "CONFIG_NET_SCH_FQ_CODEL=y",
-              "CONFIG_NET_SCH_CAKE=y",
-              "CONFIG_SYN_COOKIES=y",
-              # CPU Governors
-              "CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y",
-              "CONFIG_CPU_FREQ_GOV_PERFORMANCE=y",
-              "CONFIG_CPU_FREQ_GOV_POWERSAVE=y",
-              "CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y",
-              "CONFIG_CPU_FREQ_GOV_USERSPACE=y",
-              "CONFIG_CPU_FREQ_STAT=y",
-              # Scheduler
-              "CONFIG_CFS_BANDWIDTH=y",
-              "CONFIG_SCHED_AUTOGROUP=y",
-              "CONFIG_PREEMPT=y",
-              "CONFIG_HZ_300=y",
-              # Memory
-              "CONFIG_ZSMALLOC=y",
-              "CONFIG_ZRAM=y",
-              "CONFIG_ZRAM_DEF_COMP_LZ4=y",
-              "CONFIG_TRANSPARENT_HUGEPAGE=y",
-              "CONFIG_ZSWAP=y",
-              "CONFIG_KSM=y",
-              # I/O
-              "CONFIG_MQ_IOSCHED_DEADLINE=y",
-              "CONFIG_MQ_IOSCHED_KYBER=y",
-              "CONFIG_IOSCHED_BFQ=y",
-              # Security base
-              "CONFIG_SECURITY=y",
-              "CONFIG_SECURITY_DMESG_RESTRICT=y",
-              "CONFIG_SECURITY_SELINUX=y",
-              "CONFIG_SECURITY_SELINUX_DEVELOP=y",
-              "CONFIG_SECURITY_SELINUX_BOOTPARAM=y",
-              "CONFIG_SECURITY_SELINUX_BOOTPARAM_VALUE=1",
-              "CONFIG_BPF=y",
-              "CONFIG_BPF_SYSCALL=y",
-              "CONFIG_BPF_JIT=y",
-              "CONFIG_BPF_JIT_ALWAYS_ON=y",
-              "CONFIG_SECCOMP=y",
-              "CONFIG_SECCOMP_FILTER=y",
-          ]
+          # === BakaSU minimal ===
+          CONFIG_WERROR=n
+          CONFIG_KSU=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          CFGEOF
 
-          # CPU Governor default
-          gov_map = {
-              "schedutil":    "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y",
-              "performance":  "CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y",
-              "conservative": "CONFIG_CPU_FREQ_DEFAULT_GOV_CONSERVATIVE=y",
-          }
-          cfg.append(gov_map.get(cpu_gov, "CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y"))
+          # SuSFS configs kalau applied
+          if [ "${{ env.SUSFS_APPLIED }}" = "true" ]; then
+            cat >> "$DF" << 'SUSEOF'
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_SU=n
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          SUSEOF
+          else
+            echo "CONFIG_KSU_SUSFS=n" >> "$DF"
+          fi
 
-          # Integrity bypass configs
-          if bypass == "true":
-              cfg += [
-                  "# CONFIG_SECURITY_LOCKDOWN_LSM is not set",
-                  "CONFIG_DEVMEM=y",
-                  "# CONFIG_STRICT_DEVMEM is not set",
-                  "# CONFIG_MODULE_SIG is not set",
-                  "# CONFIG_MODULE_SIG_FORCE is not set",
-                  "# CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG is not set",
-              ]
-
-          # Full security stack
-          if full_sec == "true":
-              cfg += [
-                  # Memory hardening
-                  "CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y",
-                  "CONFIG_INIT_ON_FREE_DEFAULT_ON=y",
-                  "CONFIG_SLAB_FREELIST_RANDOM=y",
-                  "CONFIG_SLAB_FREELIST_HARDENED=y",
-                  "CONFIG_SHUFFLE_PAGE_ALLOCATOR=y",
-                  "CONFIG_FORTIFY_SOURCE=y",
-                  "CONFIG_HARDENED_USERCOPY=y",
-                  "CONFIG_KFENCE=y",
-                  "CONFIG_VMAP_STACK=y",
-                  "CONFIG_REFCOUNT_FULL=y",
-                  "CONFIG_PAGE_POISONING=y",
-                  # Kernel hardening
-                  "CONFIG_STACKPROTECTOR=y",
-                  "CONFIG_STACKPROTECTOR_STRONG=y",
-                  "CONFIG_STRICT_KERNEL_RWX=y",
-                  "CONFIG_STRICT_MODULE_RWX=y",
-                  "CONFIG_RANDOMIZE_BASE=y",
-                  "CONFIG_LATENT_ENTROPY=y",
-                  "CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y",
-                  "CONFIG_GCC_PLUGIN_STRUCTLEAK=y",
-                  "CONFIG_GCC_PLUGIN_STACKLEAK=y",
-                  "CONFIG_GCC_PLUGIN_RANDSTRUCT=y",
-                  # ARM64 hardware security
-                  "CONFIG_ARM64_PTR_AUTH=y",
-                  "CONFIG_ARM64_PTR_AUTH_KERNEL=y",
-                  "CONFIG_ARM64_BTI=y",
-                  "CONFIG_ARM64_BTI_KERNEL=y",
-                  "CONFIG_ARM64_MTE=y",
-                  "CONFIG_SHADOW_CALL_STACK=y",
-                  "CONFIG_ARM64_PAN=y",
-                  "CONFIG_UNMAP_KERNEL_AT_EL0=y",
-                  "CONFIG_HARDEN_BRANCH_PREDICTOR=y",
-                  "CONFIG_CFI_CLANG=y",
-                  "CONFIG_CFI_PERMISSIVE=n",
-                  # Network security
-                  "CONFIG_NETFILTER=y",
-                  "CONFIG_NF_CONNTRACK=y",
-                  "CONFIG_NF_TABLES=y",
-                  "CONFIG_WIREGUARD=y",
-                  "CONFIG_XFRM=y",
-                  "CONFIG_INET_ESP=y",
-                  # eBPF security
-                  "CONFIG_BPF_LSM=y",
-                  "CONFIG_SECURITY_BPFLSM=y",
-                  # Crypto
-                  "CONFIG_CRYPTO_AES_ARM64_CE=y",
-                  "CONFIG_CRYPTO_CHACHA20POLY1305=y",
-                  "CONFIG_CRYPTO_SHA256_ARM64=y",
-                  "CONFIG_CRYPTO_DRBG=y",
-                  "CONFIG_CRYPTO_JITTERENTROPY=y",
-                  "CONFIG_HW_RANDOM_QCOM=y",
-                  "# CONFIG_CRYPTO_MD5 is not set",
-                  "# CONFIG_CRYPTO_RC4 is not set",
-                  # Audit + IMA
-                  "CONFIG_AUDIT=y",
-                  "CONFIG_AUDITSYSCALL=y",
-                  "CONFIG_IMA=y",
-                  "CONFIG_IMA_APPRAISE=y",
-                  "CONFIG_EVM=y",
-                  # Process isolation
-                  "CONFIG_SECURITY_YAMA=y",
-                  "CONFIG_NAMESPACES=y",
-                  "CONFIG_USER_NS=y",
-                  "CONFIG_CGROUPS=y",
-                  "CONFIG_BLK_CGROUP=y",
-                  "CONFIG_MEMCG=y",
-                  # Filesystem security
-                  "CONFIG_FS_ENCRYPTION=y",
-                  "CONFIG_FS_VERITY=y",
-                  "CONFIG_DM_CRYPT=y",
-                  "CONFIG_DM_VERITY=y",
-              ]
-
-          # RO/RW support configs
-          cfg += [
-              # Overlayfs - required for RW system overlay
-              "CONFIG_OVERLAY_FS=y",
-              "CONFIG_OVERLAY_FS_REDIRECT_DIR=y",
-              "CONFIG_OVERLAY_FS_REDIRECT_ALWAYS_FOLLOW=y",
-              "CONFIG_OVERLAY_FS_INDEX=y",
-              "CONFIG_OVERLAY_FS_XINO_AUTO=y",
-              "CONFIG_OVERLAY_FS_METACOPY=y",
-              # FUSE
-              "CONFIG_FUSE_FS=y",
-              "CONFIG_VIRTIO_FS=n",
-              # Tmpfs
-              "CONFIG_TMPFS=y",
-              "CONFIG_TMPFS_POSIX_ACL=y",
-              "CONFIG_TMPFS_XATTR=y",
-              # Filesystem remount
-              "# CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG is not set",
-              "# CONFIG_FS_VERITY_BUILTIN_SIGNATURES is not set",
-              # Block device RW
-              "CONFIG_BLK_DEV_WRITE_MOUNTED=y",
-          ]
-
-          # GPS
-          if gps == "true":
-              cfg += [
-                  "CONFIG_GNSS=y",
-                  "CONFIG_GNSS_SERIAL=y",
-                  # QCOM_GENI_SE harus =m bukan =y
-                  # kalau =y akan konflik dengan techpack module
-                  "# CONFIG_QCOM_GENI_SE is not set",
-              ]
-
-          # Dolby audio
-          if dolby == "true":
-              cfg += [
-                  "CONFIG_SND_SOC_COMPRESS=y",
-                  "CONFIG_SND_COMPRESS_OFFLOAD=y",
-                  "CONFIG_SND_SOC_WCD938X=y",
-                  "CONFIG_SND_PCM_OSS=y",
-              ]
-
-          # SuSFS
-          susfs_cfg = [
-              "CONFIG_KSU_SUSFS=y",
-              "CONFIG_KSU_SUSFS_SUS_PATH=y",
-              "CONFIG_KSU_SUSFS_SUS_MOUNT=y",
-              "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y",
-              "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y",
-              "CONFIG_KSU_SUSFS_SUS_KSTAT=y",
-              "CONFIG_KSU_SUSFS_TRY_UMOUNT=y",
-              "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y",
-              "CONFIG_KSU_SUSFS_SPOOF_UNAME=y",
-              "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y",
-              "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y",
-              "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y",
-              "CONFIG_KSU_SUSFS_SUS_SU=n",
-          ]
-
-          with open(df, "a", encoding="utf-8") as f:
-              f.write("\n# === Marble Full Power ===\n")
-              for c in cfg:
-                  f.write(c + "\n")
-              if susfs_ok == "true":
-                  f.write("\n# SuSFS\n")
-                  for c in susfs_cfg:
-                      f.write(c + "\n")
-                  f.write(
-                      "CONFIG_KSU_SUSFS_ENABLE_LOG=n\n"
-                      if sec_level == "maximum_stealth"
-                      else "CONFIG_KSU_SUSFS_ENABLE_LOG=y\n"
-                  )
-              else:
-                  f.write("CONFIG_KSU_SUSFS=n\n")
-
-          print(f">>> {len(cfg)} configs written to {df}")
-          PYEOF
-
-          git add -A && git commit -m "config: marble full power defconfig" || true
+          git add -A && git commit -m "config: minimal BakaSU+SuSFS only" || true
+          echo ">>> Defconfig: minimal — BakaSU + SuSFS only"
 
       - name: Compile Kernel
         run: |
           cd kernel
-          export KBUILD_BUILD_USER="marble-fp"
+          export KBUILD_BUILD_USER="marble-minimal"
           export KBUILD_BUILD_HOST="kanha"
           export CCACHE_DIR="$HOME/.ccache"
           export USE_CCACHE=1
-          ccache -M 8G
+          ccache -M 5G
 
+          # Minimal CFLAGS — tidak ada O3, tidak ada extra flags
           CFLAGS="-Wno-error"
           CFLAGS="$CFLAGS -Wno-implicit-function-declaration"
           CFLAGS="$CFLAGS -Wno-unused-function"
           CFLAGS="$CFLAGS -Wno-strict-prototypes"
           CFLAGS="$CFLAGS -Wno-out-of-line-declaration"
           CFLAGS="$CFLAGS -Wno-incompatible-pointer-types"
-          CFLAGS="$CFLAGS -O3 -pipe"
-          CFLAGS="$CFLAGS -mcpu=cortex-a710 -mtune=cortex-a710"
 
           make O=out ARCH=arm64 \
             CC="ccache clang" LLVM=1 LLVM_IAS=1 \
             "${{ env.TARGET_DEFCONFIG }}"
-
-          [ -f "arch/arm64/configs/vendor/marble_GKI.config" ] \
-            && [ "${{ env.TARGET_DEFCONFIG }}" = "gki_defconfig" ] \
-            && ./scripts/kconfig/merge_config.sh -m -O out \
-               out/.config arch/arm64/configs/vendor/marble_GKI.config \
-            || true
 
           ./scripts/config --file out/.config \
             -d WERROR \
@@ -1011,14 +379,11 @@ jobs:
           set -e
 
           if [ $S -ne 0 ]; then
-            echo ">>> BUILD FAILED — last errors:"
-            grep -E "error:|fatal error:|undefined reference" \
-              build.log | tail -50 || true
+            echo ">>> BUILD FAILED:"
+            grep -E "error:|fatal error:" build.log | tail -30 || true
             exit $S
           fi
-
-          ccache -s
-          echo ">>> BUILD SUCCESS"
+          echo ">>> BUILD SUCCESS — minimal kernel"
 
       - name: Package AnyKernel3
         run: |
@@ -1026,11 +391,10 @@ jobs:
           cd AnyKernel3
           rm -rf .git README.md modules patch ramdisk
 
-          # anykernel.sh
           cat > anykernel.sh << 'AKEOF'
-          # AnyKernel3 - Marble Full Power
+          # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble FullPower - BakaSU - by kanha
+          kernel.string=Marble Minimal - BakaSU + SuSFS - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -1052,240 +416,35 @@ jobs:
           flash_boot;
           AKEOF
 
-          # Post-boot tuning script
-          cat > marble_tune.sh << 'TUNEEOF'
-          #!/system/bin/sh
-          while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done
-          sleep 3
-
-          # Integrity spoof
-          resetprop -n ro.boot.verifiedbootstate green
-          resetprop -n ro.boot.vbmeta.device_state locked
-          resetprop -n ro.boot.flash.locked 1
-          resetprop -n ro.boot.warranty_bit 0
-          resetprop -n ro.warranty_bit 0
-          resetprop -n ro.debuggable 0
-          resetprop -n ro.secure 1
-          resetprop -n ro.build.type user
-          resetprop -n ro.build.tags release-keys
-          resetprop -n vendor.boot.verifiedbootstate green
-
-          # Kernel hardening
-          echo 1 > /proc/sys/kernel/kptr_restrict
-          echo 1 > /proc/sys/kernel/dmesg_restrict
-          echo 2 > /proc/sys/kernel/randomize_va_space
-          echo 1 > /proc/sys/fs/protected_hardlinks
-          echo 1 > /proc/sys/fs/protected_symlinks
-          echo 0 > /proc/sys/kernel/sysrq
-          echo 0 > /proc/sys/fs/suid_dumpable
-
-          # Network security
-          echo 1 > /proc/sys/net/ipv4/tcp_syncookies
-          echo 0 > /proc/sys/net/ipv4/tcp_timestamps
-          echo 1 > /proc/sys/net/ipv4/conf/all/rp_filter
-          echo 0 > /proc/sys/net/ipv4/conf/all/accept_redirects
-          echo 0 > /proc/sys/net/ipv4/conf/all/send_redirects
-          echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts
-          echo 0 > /proc/sys/net/ipv6/conf/all/accept_redirects
-
-          # TCP optimization
-          echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
-          echo fq > /proc/sys/net/core/default_qdisc
-          echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle
-          echo 1 > /proc/sys/net/ipv4/tcp_fastopen
-          echo 2 > /proc/sys/net/core/bpf_jit_harden
-          echo 4194304 > /proc/sys/net/core/rmem_max
-          echo 4194304 > /proc/sys/net/core/wmem_max
-
-          # Signal & Radio
-          resetprop -n persist.vendor.radio.add_power_save 0
-          resetprop -n persist.vendor.radio.apm_sim_not_pwdn 1
-          resetprop -n persist.vendor.radio.sib16_support 1
-          resetprop -n persist.vendor.radio.rat_on combo
-
-          # GPS
-          resetprop -n persist.gps.qc_nlp_in_use 1
-          resetprop -n ro.gps.agps_provider 1
-          resetprop -n persist.vendor.gps.hal.start.mode 2
-
-          # CPU Governor
-          GOV=schedutil
-          for p in /sys/devices/system/cpu/cpufreq/policy*; do
-            echo $GOV > "$p/scaling_governor" 2>/dev/null || true
-            echo 500  > "$p/schedutil/up_rate_limit_us" 2>/dev/null || true
-            echo 2000 > "$p/schedutil/down_rate_limit_us" 2>/dev/null || true
-          done
-
-          # Memory
-          echo 100 > /proc/sys/vm/swappiness
-          echo 10  > /proc/sys/vm/dirty_ratio
-          echo 5   > /proc/sys/vm/dirty_background_ratio
-
-          # I/O
-          for q in /sys/block/*/queue; do
-            [ -d "$q" ] || continue
-            echo mq-deadline > "$q/scheduler" 2>/dev/null || true
-            echo 64 > "$q/read_ahead_kb" 2>/dev/null || true
-            echo 0  > "$q/add_random" 2>/dev/null || true
-          done
-
-          # === RO/RW SUPPORT ===
-          # Disable dm-verity via cmdline (belt and suspenders)
-          resetprop -n ro.boot.veritymode disabled
-
-          # Remount system partitions RW
-          # RO/RW via post-boot remount script
-          # semua C source patches sudah diremove (caused bootloop)
-          # remount dilakukan pure via shell post-boot
-
-          for part in system vendor product system_ext odm; do
-            if mountpoint -q "/$part" 2>/dev/null; then
-              mount -o remount,rw "/$part" 2>/dev/null && \
-                log -t marble-rw "/$part remounted rw" || \
-                log -t marble-rw "/$part remount failed (may already be rw)"
-            fi
-          done
-
-          # Verify RW status
-          for part in system vendor product; do
-            if mountpoint -q "/$part" 2>/dev/null; then
-              RW=$(mount | grep " /$part " | grep -c "rw" || true)
-              if [ "$RW" -gt 0 ]; then
-                log -t marble-rw "/$part: RW OK"
-              else
-                log -t marble-rw "/$part: still RO - trying force"
-                blockdev --setrw $(mount | grep " /$part " | awk '{print $1}') 2>/dev/null || true
-                mount -o remount,rw "/$part" 2>/dev/null || true
-              fi
-            fi
-          done
-
-          # Dolby Atmos
-          resetprop -n audio.deep_buffer.media true
-          resetprop -n audio.offload.gapless.enabled true
-          resetprop -n persist.audio.fluence.speaker true
-          resetprop -n persist.vendor.audio.fluence.for.speaker true
-
-          setenforce 0 2>/dev/null || true
-          log -t marble-fp "Post-boot tuning done"
-          TUNEEOF
-          chmod 755 marble_tune.sh
-
-          # === EMERGENCY RECOVERY SCRIPT ===
-          # Script ini jalan di recovery SEBELUM reboot
-          # Simpan semua info penting ke internal storage
-          # kalau bootloop terjadi, file ini masih ada
+          # Emergency backup — simpan boot sebelum reboot
           cat > marble_emergency.sh << 'EMERGEOF'
           #!/sbin/sh
-          # Marble Emergency Log Saver
-          # Jalan otomatis setelah kernel di-flash, sebelum reboot
-          # Simpan semua info ke /sdcard/marble_debug/
-
-          LOG_DIR="/sdcard/marble_debug"
-          mkdir -p "$LOG_DIR"
+          mkdir -p /sdcard/marble_debug
           DATE=$(date +"%Y%m%d_%H%M%S")
-
-          echo "=== Marble Emergency Log Saver ===" > "$LOG_DIR/README.txt"
-          echo "Kalau bootloop terjadi:" >> "$LOG_DIR/README.txt"
-          echo "1. Boot ke fastboot: Vol Down + Power" >> "$LOG_DIR/README.txt"
-          echo "2. fastboot boot orangefox.img (dari PC)" >> "$LOG_DIR/README.txt"
-          echo "3. Ambil file dari $LOG_DIR/" >> "$LOG_DIR/README.txt"
-          echo "4. Kirim ke developer untuk analisis" >> "$LOG_DIR/README.txt"
-
-          # 1. Backup boot image sebelum flash kernel baru
-          echo "[*] Saving current boot image..."
           dd if=/dev/block/bootdevice/by-name/boot_a \
-             of="$LOG_DIR/boot_backup_${DATE}.img" bs=4096 2>/dev/null \
-             && echo "boot_a backup: OK" >> "$LOG_DIR/status.txt" \
-             || echo "boot_a backup: FAILED" >> "$LOG_DIR/status.txt"
-
-          # 2. Recovery dmesg (kernel log saat ini di recovery)
-          echo "[*] Saving recovery dmesg..."
-          dmesg > "$LOG_DIR/recovery_dmesg_${DATE}.txt" 2>/dev/null
-          echo "recovery dmesg: saved" >> "$LOG_DIR/status.txt"
-
-          # 3. Partisi info
-          echo "[*] Saving partition info..."
-          cat /proc/partitions > "$LOG_DIR/partitions.txt" 2>/dev/null
-          ls -la /dev/block/bootdevice/by-name/ > "$LOG_DIR/block_devices.txt" 2>/dev/null
-          mount > "$LOG_DIR/mounts.txt" 2>/dev/null
-
-          # 4. Kernel info yang lagi jalan (recovery kernel)
-          echo "[*] Saving kernel info..."
-          cat /proc/version > "$LOG_DIR/kernel_version.txt" 2>/dev/null
-          cat /proc/cmdline > "$LOG_DIR/kernel_cmdline.txt" 2>/dev/null
-
-          # 5. Device info
-          echo "[*] Saving device info..."
-          getprop > "$LOG_DIR/getprop_${DATE}.txt" 2>/dev/null
-          getprop ro.build.fingerprint >> "$LOG_DIR/status.txt" 2>/dev/null
-          getprop ro.boot.slot_suffix >> "$LOG_DIR/status.txt" 2>/dev/null
-
-          # 6. Verify new kernel yang baru di-flash
-          echo "[*] Verifying new kernel..."
-          dd if=/dev/block/bootdevice/by-name/boot_a \
-             bs=1 count=2048 skip=0 2>/dev/null \
-             | strings | grep -E "Linux|kernel|marble|Melt" \
-             > "$LOG_DIR/new_kernel_verify.txt" 2>/dev/null
-
-          # 7. Simpan OrangeFox log kalau ada
-          if [ -f "/sdcard/Fox/logs/dmesg.log" ]; then
-            cp /sdcard/Fox/logs/dmesg.log "$LOG_DIR/fox_dmesg.txt"
-            echo "fox dmesg: copied" >> "$LOG_DIR/status.txt"
-          fi
-
-          # 8. Buat script fastboot recovery
-          cat > "$LOG_DIR/HOW_TO_RECOVER.txt" << 'HOWTO'
-          === CARA RECOVERY KALAU BOOTLOOP ===
-
-          METODE 1 - Fastboot boot recovery sementara (tanpa PC):
-          Tidak bisa tanpa PC kalau recovery hilang.
-
-          METODE 2 - Pakai PC:
-          1. Install ADB/Fastboot di PC
-          2. Tahan Vol Down + Power → masuk fastboot
-          3. Hubungkan ke PC via USB
-          4. fastboot devices   (verify detected)
-          5. fastboot boot OrangeFox.img  (boot recovery sementara)
-          6. Di recovery → Install → flash boot_backup.img dari folder ini
-          7. Reboot → device normal kembali
-
-          METODE 3 - Flash kernel lama dari recovery:
-          1. Masuk recovery (kalau masih bisa)
-          2. Install → boot_backup_XXXXXX.img
-          3. Reboot
-
-          File debug ada di: /sdcard/marble_debug/
-          HOWTO
-
-          echo "[*] All logs saved to $LOG_DIR"
-          echo "[*] Emergency save complete: $(date)" >> "$LOG_DIR/status.txt"
-
-          # Sync filesystem
+             of="/sdcard/marble_debug/boot_backup_${DATE}.img" \
+             bs=4096 2>/dev/null && \
+             echo "boot backup saved" || echo "backup failed"
+          dmesg > "/sdcard/marble_debug/dmesg_${DATE}.txt" 2>/dev/null
+          getprop > "/sdcard/marble_debug/props_${DATE}.txt" 2>/dev/null
           sync
+          echo "Emergency save done: /sdcard/marble_debug/"
           EMERGEOF
           chmod 755 marble_emergency.sh
 
-          # === UPDATE ANYKERNEL.SH — CALL EMERGENCY SCRIPT ===
-          # Tambah panggilan emergency script di anykernel.sh
-          # Jalan setelah flash sebelum reboot
-          cat >> anykernel.sh << 'AKAPPEND'
+          cat >> anykernel.sh << 'EMERG'
 
-          # Emergency: save logs before reboot
-          # Script ini simpan boot backup dan debug info ke /sdcard/marble_debug/
-          if [ -f "$AKHOME/marble_emergency.sh" ]; then
-            sh "$AKHOME/marble_emergency.sh"
-          fi
-          AKAPPEND
+          # Save emergency logs before reboot
+          sh "$AKHOME/marble_emergency.sh"
+          EMERG
 
-          # Copy kernel image
+          # Copy kernel
           if [ -f "../kernel/out/arch/arm64/boot/Image" ]; then
             cp ../kernel/out/arch/arm64/boot/Image .
           elif [ -f "../kernel/out/arch/arm64/boot/Image.gz" ]; then
             cp ../kernel/out/arch/arm64/boot/Image.gz .
           else
-            echo "ERROR: No kernel image found"
-            exit 1
+            echo "ERROR: no kernel image"; exit 1
           fi
 
           # Copy modules
@@ -1293,64 +452,15 @@ jobs:
           find ../kernel/out -name "*.ko" \
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
-          # Build info
           D=$(date +"%Y%m%d-%H%M")
-          cat > BUILD_INFO.txt << INFOEOF
-          ================================
-          Marble Full Power Kernel
-          ================================
-          Date:      $(date -u '+%Y-%m-%d %H:%M UTC')
-          Device:    Poco F5 / marble (SM7475)
-          Source:    fauzi882/android_kernel_poco-f5
-          Branch:    melt-rebase
-          KSU:       BakaSU
-          SuSFS:     ${{ env.SUSFS_APPLIED }}
-          Security:  ${{ github.event.inputs.security_level }}
-          Governor:  ${{ github.event.inputs.cpu_governor }}
-          Bypass:    ${{ github.event.inputs.enable_bypass }}
-          ================================
-          INFOEOF
-
-          # Emergency recovery guide di dalam zip
-          cat > EMERGENCY_RECOVERY.txt << 'EREOF'
-          ============================================
-          MARBLE KERNEL - EMERGENCY RECOVERY GUIDE
-          ============================================
-
-          KALAU BOOTLOOP SETELAH FLASH KERNEL INI:
-
-          STEP 1 - Cek /sdcard/marble_debug/
-          File debug otomatis disimpan setelah flash:
-          - boot_backup_XXXX.img  → boot image sebelum kernel baru
-          - recovery_dmesg_XXXX.txt → kernel log waktu flash
-          - getprop_XXXX.txt → device properties
-          - new_kernel_verify.txt → verifikasi kernel baru
-          - HOW_TO_RECOVER.txt → panduan recovery
-
-          STEP 2 - Recovery via Fastboot (butuh PC)
-          1. Tahan Vol Down + Power → Fastboot mode
-          2. Hubungkan ke PC
-          3. fastboot boot OrangeFox.img
-          4. Di recovery → Install → /sdcard/marble_debug/boot_backup.img
-          5. Reboot → device normal
-
-          STEP 3 - Kirim log ke developer
-          Zip folder /sdcard/marble_debug/ dan kirim untuk analisis.
-
-          STEP 4 - Flash kernel lama (aman)
-          Di recovery: Install → flash zip kernel sebelumnya
-
-          ============================================
-          EREOF
-
-          ZIP="Marble-FullPower-BakaSU-${D}.zip"
+          ZIP="Marble-Minimal-BakaSU-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
-          echo ">>> Package: ${ZIP}"
+          echo ">>> ZIP: ${ZIP}"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-FullPower-BakaSU
+          name: Marble-Minimal-BakaSU
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
