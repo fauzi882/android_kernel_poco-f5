@@ -407,11 +407,6 @@ jobs:
           CONFIG_SCHED_AUTOGROUP=y
           CONFIG_HZ_300=y
 
-          # === Round 3: Integrity bypass configs ===
-          # CONFIG_SECURITY_LOCKDOWN_LSM is not set
-          # CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG is not set
-          # CONFIG_MODULE_SIG is not set
-          # CONFIG_MODULE_SIG_FORCE is not set
           CFGEOF
 
           # SuSFS configs kalau applied
@@ -500,7 +495,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Round3b - BakaSU + SuSFS + BBR + Integrity(safe) - kanha
+          kernel.string=Marble Round3c - BakaSU + SuSFS + BBR + CPU - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -587,7 +582,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Round3b-Safe-${D}.zip"
+          ZIP="Marble-Round3c-CPU-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -595,6 +590,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Round3b-Safe
+          name: Marble-Round3c-CPU
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
