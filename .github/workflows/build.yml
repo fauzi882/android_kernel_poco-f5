@@ -1181,6 +1181,113 @@ jobs:
           TUNEEOF
           chmod 755 marble_tune.sh
 
+          # === EMERGENCY RECOVERY SCRIPT ===
+          # Script ini jalan di recovery SEBELUM reboot
+          # Simpan semua info penting ke internal storage
+          # kalau bootloop terjadi, file ini masih ada
+          cat > marble_emergency.sh << 'EMERGEOF'
+          #!/sbin/sh
+          # Marble Emergency Log Saver
+          # Jalan otomatis setelah kernel di-flash, sebelum reboot
+          # Simpan semua info ke /sdcard/marble_debug/
+
+          LOG_DIR="/sdcard/marble_debug"
+          mkdir -p "$LOG_DIR"
+          DATE=$(date +"%Y%m%d_%H%M%S")
+
+          echo "=== Marble Emergency Log Saver ===" > "$LOG_DIR/README.txt"
+          echo "Kalau bootloop terjadi:" >> "$LOG_DIR/README.txt"
+          echo "1. Boot ke fastboot: Vol Down + Power" >> "$LOG_DIR/README.txt"
+          echo "2. fastboot boot orangefox.img (dari PC)" >> "$LOG_DIR/README.txt"
+          echo "3. Ambil file dari $LOG_DIR/" >> "$LOG_DIR/README.txt"
+          echo "4. Kirim ke developer untuk analisis" >> "$LOG_DIR/README.txt"
+
+          # 1. Backup boot image sebelum flash kernel baru
+          echo "[*] Saving current boot image..."
+          dd if=/dev/block/bootdevice/by-name/boot_a \
+             of="$LOG_DIR/boot_backup_${DATE}.img" bs=4096 2>/dev/null \
+             && echo "boot_a backup: OK" >> "$LOG_DIR/status.txt" \
+             || echo "boot_a backup: FAILED" >> "$LOG_DIR/status.txt"
+
+          # 2. Recovery dmesg (kernel log saat ini di recovery)
+          echo "[*] Saving recovery dmesg..."
+          dmesg > "$LOG_DIR/recovery_dmesg_${DATE}.txt" 2>/dev/null
+          echo "recovery dmesg: saved" >> "$LOG_DIR/status.txt"
+
+          # 3. Partisi info
+          echo "[*] Saving partition info..."
+          cat /proc/partitions > "$LOG_DIR/partitions.txt" 2>/dev/null
+          ls -la /dev/block/bootdevice/by-name/ > "$LOG_DIR/block_devices.txt" 2>/dev/null
+          mount > "$LOG_DIR/mounts.txt" 2>/dev/null
+
+          # 4. Kernel info yang lagi jalan (recovery kernel)
+          echo "[*] Saving kernel info..."
+          cat /proc/version > "$LOG_DIR/kernel_version.txt" 2>/dev/null
+          cat /proc/cmdline > "$LOG_DIR/kernel_cmdline.txt" 2>/dev/null
+
+          # 5. Device info
+          echo "[*] Saving device info..."
+          getprop > "$LOG_DIR/getprop_${DATE}.txt" 2>/dev/null
+          getprop ro.build.fingerprint >> "$LOG_DIR/status.txt" 2>/dev/null
+          getprop ro.boot.slot_suffix >> "$LOG_DIR/status.txt" 2>/dev/null
+
+          # 6. Verify new kernel yang baru di-flash
+          echo "[*] Verifying new kernel..."
+          dd if=/dev/block/bootdevice/by-name/boot_a \
+             bs=1 count=2048 skip=0 2>/dev/null \
+             | strings | grep -E "Linux|kernel|marble|Melt" \
+             > "$LOG_DIR/new_kernel_verify.txt" 2>/dev/null
+
+          # 7. Simpan OrangeFox log kalau ada
+          if [ -f "/sdcard/Fox/logs/dmesg.log" ]; then
+            cp /sdcard/Fox/logs/dmesg.log "$LOG_DIR/fox_dmesg.txt"
+            echo "fox dmesg: copied" >> "$LOG_DIR/status.txt"
+          fi
+
+          # 8. Buat script fastboot recovery
+          cat > "$LOG_DIR/HOW_TO_RECOVER.txt" << 'HOWTO'
+          === CARA RECOVERY KALAU BOOTLOOP ===
+
+          METODE 1 - Fastboot boot recovery sementara (tanpa PC):
+          Tidak bisa tanpa PC kalau recovery hilang.
+
+          METODE 2 - Pakai PC:
+          1. Install ADB/Fastboot di PC
+          2. Tahan Vol Down + Power → masuk fastboot
+          3. Hubungkan ke PC via USB
+          4. fastboot devices   (verify detected)
+          5. fastboot boot OrangeFox.img  (boot recovery sementara)
+          6. Di recovery → Install → flash boot_backup.img dari folder ini
+          7. Reboot → device normal kembali
+
+          METODE 3 - Flash kernel lama dari recovery:
+          1. Masuk recovery (kalau masih bisa)
+          2. Install → boot_backup_XXXXXX.img
+          3. Reboot
+
+          File debug ada di: /sdcard/marble_debug/
+          HOWTO
+
+          echo "[*] All logs saved to $LOG_DIR"
+          echo "[*] Emergency save complete: $(date)" >> "$LOG_DIR/status.txt"
+
+          # Sync filesystem
+          sync
+          EMERGEOF
+          chmod 755 marble_emergency.sh
+
+          # === UPDATE ANYKERNEL.SH — CALL EMERGENCY SCRIPT ===
+          # Tambah panggilan emergency script di anykernel.sh
+          # Jalan setelah flash sebelum reboot
+          cat >> anykernel.sh << 'AKAPPEND'
+
+          # Emergency: save logs before reboot
+          # Script ini simpan boot backup dan debug info ke /sdcard/marble_debug/
+          if [ -f "$AKHOME/marble_emergency.sh" ]; then
+            sh "$AKHOME/marble_emergency.sh"
+          fi
+          AKAPPEND
+
           # Copy kernel image
           if [ -f "../kernel/out/arch/arm64/boot/Image" ]; then
             cp ../kernel/out/arch/arm64/boot/Image .
@@ -1213,6 +1320,38 @@ jobs:
           Bypass:    ${{ github.event.inputs.enable_bypass }}
           ================================
           INFOEOF
+
+          # Emergency recovery guide di dalam zip
+          cat > EMERGENCY_RECOVERY.txt << 'EREOF'
+          ============================================
+          MARBLE KERNEL - EMERGENCY RECOVERY GUIDE
+          ============================================
+
+          KALAU BOOTLOOP SETELAH FLASH KERNEL INI:
+
+          STEP 1 - Cek /sdcard/marble_debug/
+          File debug otomatis disimpan setelah flash:
+          - boot_backup_XXXX.img  → boot image sebelum kernel baru
+          - recovery_dmesg_XXXX.txt → kernel log waktu flash
+          - getprop_XXXX.txt → device properties
+          - new_kernel_verify.txt → verifikasi kernel baru
+          - HOW_TO_RECOVER.txt → panduan recovery
+
+          STEP 2 - Recovery via Fastboot (butuh PC)
+          1. Tahan Vol Down + Power → Fastboot mode
+          2. Hubungkan ke PC
+          3. fastboot boot OrangeFox.img
+          4. Di recovery → Install → /sdcard/marble_debug/boot_backup.img
+          5. Reboot → device normal
+
+          STEP 3 - Kirim log ke developer
+          Zip folder /sdcard/marble_debug/ dan kirim untuk analisis.
+
+          STEP 4 - Flash kernel lama (aman)
+          Di recovery: Install → flash zip kernel sebelumnya
+
+          ============================================
+          EREOF
 
           ZIP="Marble-FullPower-BakaSU-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
