@@ -350,81 +350,14 @@ jobs:
           git add -A && git commit -m "round1: BBR TCP tuning + BBR2 alias" || true
           echo ">>> Round 1 done: BBR tuning"
 
-      - name: Round 3 - Integrity Bypass
+      - name: Round 3 - Integrity Configs Only (No C patches)
         run: |
           cd kernel
-          python3 - << 'PYEOF'
-          import re, os
-
-          # 1. /proc/cmdline spoof — SAFE
-          # hanya ubah output string saat userspace baca /proc/cmdline
-          f = "fs/proc/cmdline.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              spoof = r"""
-          static char *spoof_cmdline(const char *o)
-          {
-              static char b[4096];
-              char *p;
-              strncpy(b, o, sizeof(b) - 1);
-              b[sizeof(b) - 1] = '\0';
-              p = strstr(b, "androidboot.verifiedbootstate=orange");
-              if (p) memcpy(p, "androidboot.verifiedbootstate=green ", 36);
-              p = strstr(b, "androidboot.verifiedbootstate=red   ");
-              if (p) memcpy(p, "androidboot.verifiedbootstate=green ", 36);
-              p = strstr(b, "androidboot.vbmeta.device_state=unlocked");
-              if (p) memcpy(p + 31, "locked  ", 8);
-              p = strstr(b, "androidboot.flash.locked=0");
-              if (p) p[25] = '1';
-              return b;
-          }
-          """
-              if "spoof_cmdline" not in src:
-                  ls = src.split("\n")
-                  li = max(
-                      (i for i, l in enumerate(ls)
-                       if l.strip().startswith("#include")),
-                      default=0
-                  )
-                  ls.insert(li + 1, spoof)
-                  src = "\n".join(ls)
-              src = re.sub(
-                  r'seq_puts\(m,\s*saved_command_line\)',
-                  'seq_puts(m, spoof_cmdline(saved_command_line))',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: cmdline spoofed")
-
-          # 2. lockdown bypass — SAFE
-          f = "security/lockdown/lockdown.c"
-          if os.path.isfile(f):
-              src = open(f, encoding="utf-8", errors="replace").read()
-              src = re.sub(
-                  r'(static\s+int\s+lockdown_is_locked_down\s*\([^)]*\)\s*\{)',
-                  r'\1\n\treturn 0; /* bypass */',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: lockdown bypassed")
-
-          # 3. Qualcomm SCM bypass — SAFE
-          for f in [
-              "drivers/firmware/qcom/qcom_scm.c",
-              "drivers/firmware/qcom_scm.c"
-          ]:
-              if not os.path.isfile(f): continue
-              src = open(f, encoding="utf-8", errors="replace").read()
-              src = re.sub(
-                  r'(int\s+qcom_scm_is_secure_boot_enabled\s*\([^)]*\)\s*\{)',
-                  r'\1\n\treturn 0; /* bypass */',
-                  src
-              )
-              open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: SCM bypassed")
-          PYEOF
-          git add -A && git commit -m "round3: integrity bypass (cmdline+lockdown+scm)" || true
-          echo ">>> Round 3 done: integrity bypass"
+          # Round 3: hanya tambah resetprop di post-boot script
+          # tidak ada C source patch yang bisa bikin bootloop
+          # integrity spoof dilakukan pure via resetprop post-boot
+          echo ">>> Round 3: integrity configs only, no C patches"
+          git add -A && git commit -m "round3: integrity via configs only" || true
 
       - name: Configure Defconfig (Minimal)
         run: |
@@ -567,7 +500,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Round3 - BakaSU + SuSFS + BBR + Integrity - kanha
+          kernel.string=Marble Round3b - BakaSU + SuSFS + BBR + Integrity(safe) - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -590,6 +523,34 @@ jobs:
           AKEOF
 
           # Emergency backup — simpan boot sebelum reboot
+          # Post-boot integrity spoof via resetprop
+          # lebih aman dari C patches — jalan setelah boot selesai
+          cat > marble_tune.sh << 'TUNEEOF'
+          #!/system/bin/sh
+          while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done
+          sleep 2
+          # Integrity spoof via resetprop
+          resetprop -n ro.boot.verifiedbootstate green
+          resetprop -n ro.boot.vbmeta.device_state locked
+          resetprop -n ro.boot.flash.locked 1
+          resetprop -n ro.boot.warranty_bit 0
+          resetprop -n ro.warranty_bit 0
+          resetprop -n ro.debuggable 0
+          resetprop -n ro.secure 1
+          resetprop -n ro.build.type user
+          resetprop -n ro.build.tags release-keys
+          resetprop -n vendor.boot.verifiedbootstate green
+          # TCP
+          echo bbr > /proc/sys/net/ipv4/tcp_congestion_control 2>/dev/null || true
+          echo fq  > /proc/sys/net/core/default_qdisc 2>/dev/null || true
+          # CPU Governor
+          for p in /sys/devices/system/cpu/cpufreq/policy*; do
+            echo schedutil > "$p/scaling_governor" 2>/dev/null || true
+          done
+          log -t marble "post-boot tune done"
+          TUNEEOF
+          chmod 755 marble_tune.sh
+
           cat > marble_emergency.sh << 'EMERGEOF'
           #!/sbin/sh
           mkdir -p /sdcard/marble_debug
@@ -626,7 +587,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Round3-Integrity-${D}.zip"
+          ZIP="Marble-Round3b-Safe-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -634,6 +595,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Round3-Integrity
+          name: Marble-Round3b-Safe
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
