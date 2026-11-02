@@ -2668,12 +2668,6 @@ free_opt:
 
 static int selinux_sb_remount(struct super_block *sb, void *mnt_opts)
 {
-	/* ro/rw patch: bypass SELinux remount security checks
-	 * allows mount -o remount,rw /system /vendor /product
-	 */
-	return 0;
-
-	{
 	struct selinux_mnt_opts *opts = mnt_opts;
 	struct superblock_security_struct *sbsec = sb->s_security;
 	u32 sid;
@@ -2722,7 +2716,6 @@ out_bad_option:
 	       "during remount (dev %s, type=%s)\n", sb->s_id,
 	       sb->s_type->name);
 	return -EINVAL;
-	} /* end ro/rw patch block */
 }
 
 static int selinux_sb_kern_mount(struct super_block *sb)
@@ -2754,8 +2747,8 @@ static int selinux_mount(const char *dev_name,
 	const struct cred *cred = current_cred();
 
 	if (flags & MS_REMOUNT)
-		/* ro/rw patch: bypass FILESYSTEM__REMOUNT permission check */
-		return 0;
+		return superblock_has_perm(cred, path->dentry->d_sb,
+					   FILESYSTEM__REMOUNT, NULL);
 	else
 		return path_has_perm(cred, path, FILE__MOUNTON);
 }
