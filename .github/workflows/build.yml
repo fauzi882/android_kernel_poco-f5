@@ -282,6 +282,74 @@ jobs:
           PYEOF
           git add -A && git commit -m "fix: clean extern declarations" || true
 
+      - name: Round 1 - BBR TCP Tuning
+        run: |
+          cd kernel
+
+          # Tune BBR parameters — hanya ubah nilai, tidak ada structural change
+          if [ -f "net/ipv4/tcp_bbr.c" ]; then
+            python3 - << 'PYEOF'
+          import re
+          path = "net/ipv4/tcp_bbr.c"
+          with open(path, encoding="utf-8") as f:
+              src = f.read()
+
+          # Tune BBR params — safe, hanya value change
+          src = src.replace(
+              "bbr_min_rtt_win_sec = 10",
+              "bbr_min_rtt_win_sec = 5"
+          )
+          src = src.replace(
+              "bbr_probe_rtt_mode_ms = 200",
+              "bbr_probe_rtt_mode_ms = 100"
+          )
+
+          # BBR2 alias — copy struct dari BBR1, rename saja
+          if "bbr2" not in src:
+              m = re.search(
+                  r'(static\s+struct\s+tcp_congestion_ops\s+'
+                  r'tcp_bbr_cong_ops\s*[^=]*=\s*\{)([^}]+)(\})',
+                  src, re.DOTALL
+              )
+              if m:
+                  fields = m.group(2)
+                  fields_bbr2 = re.sub(
+                      r'(\.name\s*=\s*)"bbr"',
+                      r'\1"bbr2"',
+                      fields
+                  )
+                  bbr2_struct = (
+                      "\n/* BBR2: alias of BBR1 */\n"
+                      f"static struct tcp_congestion_ops tcp_bbr2_ops"
+                      f" __read_mostly = {{{fields_bbr2}}};\n"
+                  )
+                  src = re.sub(
+                      r'(static\s+int\s+__init\s+bbr_register)',
+                      bbr2_struct + r'\1',
+                      src
+                  )
+                  src = re.sub(
+                      r'(return\s+tcp_register_congestion_control'
+                      r'\s*\(&tcp_bbr_cong_ops\s*\)\s*;)',
+                      r'tcp_register_congestion_control(&tcp_bbr2_ops);\n\t\1',
+                      src
+                  )
+                  src = re.sub(
+                      r'(tcp_unregister_congestion_control'
+                      r'\s*\(&tcp_bbr_cong_ops\s*\)\s*;)',
+                      r'\1\n\ttcp_unregister_congestion_control(&tcp_bbr2_ops);',
+                      src
+                  )
+                  print(">>> BBR2 alias added")
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(src)
+          print(">>> BBR tuned OK")
+          PYEOF
+          fi
+          git add -A && git commit -m "round1: BBR TCP tuning + BBR2 alias" || true
+          echo ">>> Round 1 done: BBR tuning"
+
       - name: Configure Defconfig (Minimal)
         run: |
           cd kernel
@@ -297,15 +365,26 @@ jobs:
           fi
           echo "TARGET_DEFCONFIG=$DC" >> $GITHUB_ENV
 
-          # MINIMAL — hanya yang dibutuhkan BakaSU + SuSFS
+          # ROUND 1 — BakaSU + SuSFS + BBR TCP
           cat >> "$DF" << 'CFGEOF'
 
-          # === BakaSU minimal ===
+          # === BakaSU ===
           CONFIG_WERROR=n
           CONFIG_KSU=y
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
+
+          # === Round 1: BBR TCP ===
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_RENO=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
+          CONFIG_SYN_COOKIES=y
           CFGEOF
 
           # SuSFS configs kalau applied
@@ -394,7 +473,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Minimal - BakaSU + SuSFS - kanha
+          kernel.string=Marble Round1 - BakaSU + SuSFS + BBR - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -453,7 +532,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Minimal-BakaSU-${D}.zip"
+          ZIP="Marble-Round1-BBR-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -461,6 +540,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Minimal-BakaSU
+          name: Marble-Round1-BBR
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
