@@ -630,6 +630,79 @@ jobs:
           PYEOF
           git add -A && git commit -m "perf: CPU + memory + IO tuning" || true
 
+      - name: Revert Dangerous Early Boot Patches
+        run: |
+          cd kernel
+
+          # REVERT do_mounts.c patch - MS_RDONLY removal causes bootloop
+          # Android init requires root to be mounted ro initially
+          if [ -f "init/do_mounts.c" ]; then
+            python3 - << 'PYEOF'
+          import re
+          path = "init/do_mounts.c"
+          with open(path, encoding="utf-8", errors="replace") as f:
+              src = f.read()
+
+          # Revert root_mountflags patch - restore MS_RDONLY
+          src = re.sub(
+              r'/\* ro/rw patch: remove MS_RDONLY from default root mount flags.*?\*/\n'
+              r'int root_mountflags = MS_SILENT;',
+              'int root_mountflags = MS_RDONLY | MS_SILENT;',
+              src, flags=re.DOTALL
+          )
+
+          # Revert retry patch - restore ro retry
+          src = re.sub(
+              r'\t/\* ro/rw patch: skip forced readonly retry.*?\*/\n'
+              r'\tif \(0 && !\(flags & SB_RDONLY\)\) \{',
+              '\tif (!(flags & SB_RDONLY)) {',
+              src, flags=re.DOTALL
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(src)
+          print(">>> do_mounts.c: reverted to safe state")
+          PYEOF
+          fi
+
+          # REVERT selinux/hooks.c patch - early SELinux bypass causes bootloop
+          # SELinux is required during early init, bypass only needed post-boot
+          if [ -f "security/selinux/hooks.c" ]; then
+            python3 - << 'PYEOF'
+          import re
+          path = "security/selinux/hooks.c"
+          with open(path, encoding="utf-8", errors="replace") as f:
+              src = f.read()
+
+          # Revert selinux_sb_remount - restore original behavior
+          src = re.sub(
+              r'(\tstructselinux_mnt_opts \*opts = mnt_opts;.*?'
+              r'static int selinux_sb_remount\(struct super_block \*sb, void \*mnt_opts\)\n\{)'
+              r'.*?'
+              r'(\tstruct selinux_mnt_opts \*opts = mnt_opts;)',
+              r'\1\n\2',
+              src, flags=re.DOTALL
+          )
+
+          # Safer approach: just restore FILESYSTEM__REMOUNT check
+          # but keep selinux_sb_remount bypass (it's post-mount, not early boot)
+          src = re.sub(
+              r'\t\t/\* ro/rw patch: bypass FILESYSTEM__REMOUNT permission check \*/\n'
+              r'\t\treturn 0;',
+              '\t\treturn superblock_has_perm(cred, path->dentry->d_sb,\n'
+              '\t\t\t\t\t   FILESYSTEM__REMOUNT, NULL);',
+              src
+          )
+
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(src)
+          print(">>> selinux/hooks.c: REMOUNT check restored (safe for early boot)")
+          PYEOF
+          fi
+
+          git add -A && git commit -m "fix: revert dangerous early boot patches" || true
+          echo ">>> Early boot patches reverted - RO/RW still supported via namespace+ext4+overlayfs"
+
       - name: Patch GPS + Signal + Audio
         run: |
           cd kernel
