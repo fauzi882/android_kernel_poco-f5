@@ -350,6 +350,82 @@ jobs:
           git add -A && git commit -m "round1: BBR TCP tuning + BBR2 alias" || true
           echo ">>> Round 1 done: BBR tuning"
 
+      - name: Round 3 - Integrity Bypass
+        run: |
+          cd kernel
+          python3 - << 'PYEOF'
+          import re, os
+
+          # 1. /proc/cmdline spoof — SAFE
+          # hanya ubah output string saat userspace baca /proc/cmdline
+          f = "fs/proc/cmdline.c"
+          if os.path.isfile(f):
+              src = open(f, encoding="utf-8", errors="replace").read()
+              spoof = r"""
+          static char *spoof_cmdline(const char *o)
+          {
+              static char b[4096];
+              char *p;
+              strncpy(b, o, sizeof(b) - 1);
+              b[sizeof(b) - 1] = '\0';
+              p = strstr(b, "androidboot.verifiedbootstate=orange");
+              if (p) memcpy(p, "androidboot.verifiedbootstate=green ", 36);
+              p = strstr(b, "androidboot.verifiedbootstate=red   ");
+              if (p) memcpy(p, "androidboot.verifiedbootstate=green ", 36);
+              p = strstr(b, "androidboot.vbmeta.device_state=unlocked");
+              if (p) memcpy(p + 31, "locked  ", 8);
+              p = strstr(b, "androidboot.flash.locked=0");
+              if (p) p[25] = '1';
+              return b;
+          }
+          """
+              if "spoof_cmdline" not in src:
+                  ls = src.split("\n")
+                  li = max(
+                      (i for i, l in enumerate(ls)
+                       if l.strip().startswith("#include")),
+                      default=0
+                  )
+                  ls.insert(li + 1, spoof)
+                  src = "\n".join(ls)
+              src = re.sub(
+                  r'seq_puts\(m,\s*saved_command_line\)',
+                  'seq_puts(m, spoof_cmdline(saved_command_line))',
+                  src
+              )
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: cmdline spoofed")
+
+          # 2. lockdown bypass — SAFE
+          f = "security/lockdown/lockdown.c"
+          if os.path.isfile(f):
+              src = open(f, encoding="utf-8", errors="replace").read()
+              src = re.sub(
+                  r'(static\s+int\s+lockdown_is_locked_down\s*\([^)]*\)\s*\{)',
+                  r'\1\n\treturn 0; /* bypass */',
+                  src
+              )
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: lockdown bypassed")
+
+          # 3. Qualcomm SCM bypass — SAFE
+          for f in [
+              "drivers/firmware/qcom/qcom_scm.c",
+              "drivers/firmware/qcom_scm.c"
+          ]:
+              if not os.path.isfile(f): continue
+              src = open(f, encoding="utf-8", errors="replace").read()
+              src = re.sub(
+                  r'(int\s+qcom_scm_is_secure_boot_enabled\s*\([^)]*\)\s*\{)',
+                  r'\1\n\treturn 0; /* bypass */',
+                  src
+              )
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: SCM bypassed")
+          PYEOF
+          git add -A && git commit -m "round3: integrity bypass (cmdline+lockdown+scm)" || true
+          echo ">>> Round 3 done: integrity bypass"
+
       - name: Configure Defconfig (Minimal)
         run: |
           cd kernel
@@ -365,7 +441,7 @@ jobs:
           fi
           echo "TARGET_DEFCONFIG=$DC" >> $GITHUB_ENV
 
-          # ROUND 1 — BakaSU + SuSFS + BBR TCP
+          # ROUND 1+2+3 — BakaSU + SuSFS + BBR + Schedutil + Integrity bypass
           cat >> "$DF" << 'CFGEOF'
 
           # === BakaSU ===
@@ -385,6 +461,24 @@ jobs:
           CONFIG_NET_SCH_FQ_CODEL=y
           CONFIG_NET_SCH_CAKE=y
           CONFIG_SYN_COOKIES=y
+
+          # === Round 2: CPU Governor + Scheduler ===
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+          CONFIG_CPU_FREQ_GOV_POWERSAVE=y
+          CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y
+          CONFIG_CPU_FREQ_GOV_USERSPACE=y
+          CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_STAT=y
+          CONFIG_CFS_BANDWIDTH=y
+          CONFIG_SCHED_AUTOGROUP=y
+          CONFIG_HZ_300=y
+
+          # === Round 3: Integrity bypass configs ===
+          # CONFIG_SECURITY_LOCKDOWN_LSM is not set
+          # CONFIG_DM_VERITY_VERIFY_ROOTHASH_SIG is not set
+          # CONFIG_MODULE_SIG is not set
+          # CONFIG_MODULE_SIG_FORCE is not set
           CFGEOF
 
           # SuSFS configs kalau applied
@@ -473,7 +567,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Round1 - BakaSU + SuSFS + BBR - kanha
+          kernel.string=Marble Round3 - BakaSU + SuSFS + BBR + Integrity - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -532,7 +626,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Round1-BBR-${D}.zip"
+          ZIP="Marble-Round3-Integrity-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -540,6 +634,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Round1-BBR
+          name: Marble-Round3-Integrity
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
