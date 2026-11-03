@@ -395,9 +395,16 @@ jobs:
           CONFIG_NET_SCH_CAKE=y
           CONFIG_SYN_COOKIES=y
 
-          # Round 2 CPU configs DIHAPUS untuk bisect
-          # kalau boot → CPU configs yang bikin bootloop
-          # kalau tetap bootloop → BBR configs yang masalah
+          # === CPU Bisect - Batch 1 ===
+          # Hanya tambah governor options, TIDAK ubah default governor
+          # TIDAK tambah HZ_300, CFS_BANDWIDTH, SCHED_AUTOGROUP
+          # yang paling aman dulu
+          CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
+          CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
+          CONFIG_CPU_FREQ_GOV_POWERSAVE=y
+          CONFIG_CPU_FREQ_GOV_CONSERVATIVE=y
+          CONFIG_CPU_FREQ_GOV_USERSPACE=y
+          CONFIG_CPU_FREQ_STAT=y
 
           CFGEOF
 
@@ -487,7 +494,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Bisect - BakaSU + SuSFS + BBR only - kanha
+          kernel.string=Marble CPU-Bisect1 - BBR + Governor Options - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -574,7 +581,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Bisect-BBR-${D}.zip"
+          ZIP="Marble-CPUBisect1-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -582,6 +589,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Bisect-BBR
+          name: Marble-CPUBisect1
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
