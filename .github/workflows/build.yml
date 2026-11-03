@@ -353,11 +353,54 @@ jobs:
       - name: Round 3 - Integrity Configs Only (No C patches)
         run: |
           cd kernel
-          # Round 3: hanya tambah resetprop di post-boot script
-          # tidak ada C source patch yang bisa bikin bootloop
-          # integrity spoof dilakukan pure via resetprop post-boot
-          echo ">>> Round 3: integrity configs only, no C patches"
+          echo ">>> Round 3: integrity configs only"
           git add -A && git commit -m "round3: integrity via configs only" || true
+
+      - name: Round 4 - Memory + IO Performance
+        run: |
+          cd kernel
+          python3 - << 'PYEOF'
+          import re, os
+
+          # schedutil tuning — hanya value change, safe
+          f = "kernel/sched/cpufreq_schedutil.c"
+          if os.path.isfile(f):
+              src = open(f, encoding="utf-8", errors="replace").read()
+              src = re.sub(
+                  r'(?<!ATTR)(?<!RW)(up_rate_limit_us\s*=\s*)(\d+)(\s*[;,])',
+                  r'\g<1>500\3', src
+              )
+              src = re.sub(
+                  r'(?<!ATTR)(?<!RW)(down_rate_limit_us\s*=\s*)(\d+)(\s*[;,])',
+                  r'\g<1>2000\3', src
+              )
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: schedutil tuned")
+
+          # sched latency tuning
+          f = "kernel/sched/fair.c"
+          if os.path.isfile(f):
+              src = open(f, encoding="utf-8", errors="replace").read()
+              src = re.sub(
+                  r'(sched_latency_ns\s*=\s*)6000000ULL',
+                  r'\g<1>4000000ULL', src
+              )
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: latency tuned")
+
+          # mq-deadline tuning
+          f = "block/mq-deadline.c"
+          if os.path.isfile(f):
+              src = open(f, encoding="utf-8", errors="replace").read()
+              src = re.sub(
+                  r'(dd->fifo_batch\s*=\s*)\d+(\s*[;,])',
+                  r'\g<1>8\2', src
+              )
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: fifo_batch tuned")
+          PYEOF
+          git add -A && git commit -m "round4: memory+IO performance tuning" || true
+          echo ">>> Round 4 done"
 
       - name: Configure Defconfig (Minimal)
         run: |
@@ -395,9 +438,7 @@ jobs:
           CONFIG_NET_SCH_CAKE=y
           CONFIG_SYN_COOKIES=y
 
-          # === CPU Final — tanpa CFS_BANDWIDTH dan SCHED_AUTOGROUP ===
-          # Kedua config ini bikin bootloop di marble/EvolutionX Android 15
-          # kemungkinan sudah di-handle oleh vendor cgroup setup
+          # === CPU Final (confirmed safe) ===
           CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
           CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
           CONFIG_CPU_FREQ_GOV_POWERSAVE=y
@@ -406,8 +447,17 @@ jobs:
           CONFIG_CPU_FREQ_STAT=y
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
           CONFIG_HZ_300=y
-          # CONFIG_CFS_BANDWIDTH is not set  <- BOOTLOOP confirmed
-          # CONFIG_SCHED_AUTOGROUP is not set <- BOOTLOOP confirmed
+
+          # === Round 4: Memory + I/O ===
+          CONFIG_ZSMALLOC=y
+          CONFIG_ZRAM=y
+          CONFIG_ZRAM_DEF_COMP_LZ4=y
+          CONFIG_LZ4_COMPRESS=y
+          CONFIG_ZSWAP=y
+          CONFIG_ZBUD=y
+          CONFIG_MQ_IOSCHED_DEADLINE=y
+          CONFIG_MQ_IOSCHED_KYBER=y
+          CONFIG_IOSCHED_BFQ=y
 
           CFGEOF
 
@@ -497,7 +547,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble CPU-Final - All Safe - kanha
+          kernel.string=Marble Round4 - Memory+IO - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -584,7 +634,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-CPUFinal-${D}.zip"
+          ZIP="Marble-Round4-MemIO-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -592,6 +642,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-CPUFinal
+          name: Marble-Round4-MemIO
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
