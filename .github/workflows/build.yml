@@ -395,8 +395,8 @@ jobs:
           CONFIG_NET_SCH_CAKE=y
           CONFIG_SYN_COOKIES=y
 
-          # === CPU Bisect - Batch 2 ===
-          # Tambah DEFAULT_GOV_SCHEDUTIL — paling dicurigai
+          # === CPU Bisect - Batch 3 ===
+          # Tambah HZ_300
           CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
           CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
           CONFIG_CPU_FREQ_GOV_POWERSAVE=y
@@ -404,6 +404,7 @@ jobs:
           CONFIG_CPU_FREQ_GOV_USERSPACE=y
           CONFIG_CPU_FREQ_STAT=y
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
+          CONFIG_HZ_300=y
 
           CFGEOF
 
@@ -493,7 +494,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble CPU-Bisect2 - BBR + Governor + Default Schedutil - kanha
+          kernel.string=Marble CPU-Bisect3 - BBR + Governor + HZ300 - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -580,7 +581,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-CPUBisect2-${D}.zip"
+          ZIP="Marble-CPUBisect3-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -588,6 +589,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-CPUBisect2
+          name: Marble-CPUBisect3
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
