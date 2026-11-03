@@ -395,8 +395,8 @@ jobs:
           CONFIG_NET_SCH_CAKE=y
           CONFIG_SYN_COOKIES=y
 
-          # === CPU Bisect - Batch 4 (Final) ===
-          # Tambah CFS_BANDWIDTH + SCHED_AUTOGROUP
+          # === CPU Bisect - Batch 5 ===
+          # Test CFS_BANDWIDTH saja, tanpa SCHED_AUTOGROUP
           CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
           CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
           CONFIG_CPU_FREQ_GOV_POWERSAVE=y
@@ -406,7 +406,6 @@ jobs:
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
           CONFIG_HZ_300=y
           CONFIG_CFS_BANDWIDTH=y
-          CONFIG_SCHED_AUTOGROUP=y
 
           CFGEOF
 
@@ -496,7 +495,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble CPU-Bisect4 - BBR + Full CPU - kanha
+          kernel.string=Marble CPU-Bisect5 - CFS only - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -583,7 +582,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-CPUBisect4-${D}.zip"
+          ZIP="Marble-CPUBisect5-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -591,6 +590,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-CPUBisect4
+          name: Marble-CPUBisect5
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
