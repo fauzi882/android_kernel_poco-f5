@@ -356,7 +356,7 @@ jobs:
           echo ">>> Round 3: integrity configs only"
           git add -A && git commit -m "round3: integrity via configs only" || true
 
-      - name: Round 4 - Memory + IO Performance
+      - name: Round 5 - eBPF Security + Tracing
         run: |
           cd kernel
           python3 - << 'PYEOF'
@@ -399,8 +399,8 @@ jobs:
               open(f, "w", encoding="utf-8").write(src)
               print(f">>> {f}: fifo_batch tuned")
           PYEOF
-          git add -A && git commit -m "round4: memory+IO performance tuning" || true
-          echo ">>> Round 4 done"
+          git add -A && git commit -m "round5: eBPF security + tracing" || true
+          echo ">>> Round 5 done"
 
       - name: Configure Defconfig (Minimal)
         run: |
@@ -458,6 +458,22 @@ jobs:
           CONFIG_MQ_IOSCHED_DEADLINE=y
           CONFIG_MQ_IOSCHED_KYBER=y
           CONFIG_IOSCHED_BFQ=y
+
+          # === Round 5: eBPF ===
+          CONFIG_BPF=y
+          CONFIG_BPF_SYSCALL=y
+          CONFIG_BPF_JIT=y
+          CONFIG_BPF_JIT_ALWAYS_ON=y
+          CONFIG_BPF_JIT_DEFAULT_ON=y
+          CONFIG_HAVE_EBPF_JIT=y
+          CONFIG_BPF_EVENTS=y
+          CONFIG_BPF_LSM=y
+          CONFIG_SECURITY_BPFLSM=y
+          CONFIG_BPF_STREAM_PARSER=y
+          CONFIG_CGROUP_BPF=y
+          CONFIG_BPF_RINGBUF=y
+          CONFIG_UPROBE_EVENTS=y
+          CONFIG_PERF_EVENTS=y
 
           CFGEOF
 
@@ -547,7 +563,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Round4 - Memory+IO - kanha
+          kernel.string=Marble Round5 - eBPF - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -634,7 +650,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Round4-MemIO-${D}.zip"
+          ZIP="Marble-Round5-eBPF-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -642,6 +658,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Round4-MemIO
+          name: Marble-Round5-eBPF
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
