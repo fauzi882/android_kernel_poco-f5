@@ -506,6 +506,23 @@ jobs:
           CONFIG_CRYPTO_JITTERENTROPY=y
           CONFIG_HW_RANDOM_QCOM=y
 
+          # === Round 7: ARM64 Hardware Security ===
+          # PAC + BTI + SCS — SM7475 support semua ini
+          CONFIG_ARM64_PTR_AUTH=y
+          CONFIG_ARM64_PTR_AUTH_KERNEL=y
+          CONFIG_ARM64_BTI=y
+          CONFIG_ARM64_BTI_KERNEL=y
+          CONFIG_SHADOW_CALL_STACK=y
+          CONFIG_ARM64_PAN=y
+          CONFIG_ARM64_SW_TTBR0_PAN=y
+          CONFIG_ARM64_UAO=y
+          CONFIG_ARM64_EPAN=y
+          CONFIG_UNMAP_KERNEL_AT_EL0=y
+          CONFIG_HARDEN_BRANCH_PREDICTOR=y
+          CONFIG_MITIGATE_SPECTRE_BRANCH_HISTORY=y
+          CONFIG_CFI_CLANG=y
+          CONFIG_CFI_PERMISSIVE=n
+
           CFGEOF
 
           # SuSFS configs kalau applied
@@ -594,7 +611,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Round6 - Security Hardening - kanha
+          kernel.string=Marble Round7 - ARM64 Hardware Security - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -681,7 +698,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Round6-Security-${D}.zip"
+          ZIP="Marble-Round7-ARM64-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -689,6 +706,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Round6-Security
+          name: Marble-Round7-ARM64
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
