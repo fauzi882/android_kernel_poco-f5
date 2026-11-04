@@ -507,7 +507,6 @@ jobs:
           CONFIG_HW_RANDOM_QCOM=y
 
           # === Round 7: ARM64 Hardware Security ===
-          # PAC + BTI + SCS — SM7475 support semua ini
           CONFIG_ARM64_PTR_AUTH=y
           CONFIG_ARM64_PTR_AUTH_KERNEL=y
           CONFIG_ARM64_BTI=y
@@ -522,6 +521,46 @@ jobs:
           CONFIG_MITIGATE_SPECTRE_BRANCH_HISTORY=y
           CONFIG_CFI_CLANG=y
           CONFIG_CFI_PERMISSIVE=n
+
+          # === Round 8: MTE + GCC Plugins + Network Security ===
+          # MTE — hardware memory tagging (ARMv8.5)
+          CONFIG_ARM64_MTE=y
+
+          # GCC Plugins — compiler hardening
+          CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y
+          CONFIG_GCC_PLUGIN_STRUCTLEAK=y
+          CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL=y
+          CONFIG_GCC_PLUGIN_STACKLEAK=y
+          CONFIG_GCC_PLUGIN_RANDSTRUCT=y
+
+          # Network security
+          CONFIG_NETFILTER=y
+          CONFIG_NF_CONNTRACK=y
+          CONFIG_NF_TABLES=y
+          CONFIG_NETFILTER_ADVANCED=y
+          CONFIG_IP_NF_IPTABLES=y
+          CONFIG_IP_NF_FILTER=y
+          CONFIG_IP6_NF_IPTABLES=y
+          CONFIG_IP6_NF_FILTER=y
+          CONFIG_WIREGUARD=y
+          CONFIG_XFRM=y
+          CONFIG_XFRM_USER=y
+          CONFIG_INET_ESP=y
+          CONFIG_INET_AH=y
+
+          # Crypto
+          CONFIG_CRYPTO_AES_ARM64_CE=y
+          CONFIG_CRYPTO_SHA256_ARM64=y
+          CONFIG_CRYPTO_CHACHA20POLY1305=y
+          CONFIG_CRYPTO_BLAKE2S=y
+          CONFIG_CRYPTO_DRBG=y
+          CONFIG_CRYPTO_DRBG_HMAC=y
+
+          # Filesystem security
+          CONFIG_FS_ENCRYPTION=y
+          CONFIG_FS_VERITY=y
+          CONFIG_DM_CRYPT=y
+          CONFIG_DM_INTEGRITY=y
 
           CFGEOF
 
@@ -611,7 +650,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Round7 - ARM64 Hardware Security - kanha
+          kernel.string=Marble Round8 - MTE + Full Security - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -698,7 +737,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Round7-ARM64-${D}.zip"
+          ZIP="Marble-Round8-MTE-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -706,6 +745,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Round7-ARM64
+          name: Marble-Round8-MTE
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
