@@ -475,6 +475,37 @@ jobs:
           CONFIG_UPROBE_EVENTS=y
           CONFIG_PERF_EVENTS=y
 
+          # === Round 6: Security Hardening (Tier 1) ===
+          # Memory hardening — safe, production proven
+          CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
+          CONFIG_INIT_ON_FREE_DEFAULT_ON=y
+          CONFIG_SLAB_FREELIST_RANDOM=y
+          CONFIG_SLAB_FREELIST_HARDENED=y
+          CONFIG_SHUFFLE_PAGE_ALLOCATOR=y
+          CONFIG_FORTIFY_SOURCE=y
+          CONFIG_HARDENED_USERCOPY=y
+          CONFIG_VMAP_STACK=y
+          CONFIG_REFCOUNT_FULL=y
+          CONFIG_STACKPROTECTOR=y
+          CONFIG_STACKPROTECTOR_STRONG=y
+          CONFIG_STRICT_KERNEL_RWX=y
+          CONFIG_STRICT_MODULE_RWX=y
+          CONFIG_RANDOMIZE_BASE=y
+          CONFIG_PAGE_POISONING=y
+          # Yama ptrace restriction
+          CONFIG_SECURITY_YAMA=y
+          # Namespaces
+          CONFIG_NAMESPACES=y
+          CONFIG_USER_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_NET_NS=y
+          # Audit
+          CONFIG_AUDIT=y
+          CONFIG_AUDITSYSCALL=y
+          # Crypto hardening
+          CONFIG_CRYPTO_JITTERENTROPY=y
+          CONFIG_HW_RANDOM_QCOM=y
+
           CFGEOF
 
           # SuSFS configs kalau applied
@@ -563,7 +594,7 @@ jobs:
           cat > anykernel.sh << 'AKEOF'
           # AnyKernel3 - Marble Minimal BakaSU
           properties() { '
-          kernel.string=Marble Round5 - eBPF - kanha
+          kernel.string=Marble Round6 - Security Hardening - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -650,7 +681,7 @@ jobs:
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-Round5-eBPF-${D}.zip"
+          ZIP="Marble-Round6-Security-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
@@ -658,6 +689,6 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-Round5-eBPF
+          name: Marble-Round6-Security
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 14
