@@ -586,23 +586,46 @@ jobs:
           CONFIG_IP6T_HL=y
           CFGEOF
 
-          # CFI — HyperOS only (confirmed boot), skip for EvolutionX
+          # === Variant-specific configs ===
+          CFI="${{ matrix.variant.cfi }}"
+          MTE="${{ matrix.variant.mte }}"
+          VARIANT="${{ matrix.variant.suffix }}"
+
           if [ "$CFI" = "true" ]; then
             echo "CONFIG_CFI_CLANG=y" >> "$DF"
             echo "CONFIG_CFI_PERMISSIVE=n" >> "$DF"
-            echo ">>> CFI enabled (HyperOS variant)"
+            echo ">>> CFI enabled (HyperOS)"
           else
-            echo "# CONFIG_CFI_CLANG is not set (EvolutionX compat)" >> "$DF"
-            echo ">>> CFI disabled (EvolutionX variant)"
+            echo "# CONFIG_CFI_CLANG is not set" >> "$DF"
+            echo ">>> CFI disabled (EvolutionX)"
           fi
 
-          # MTE — HyperOS only, skip for EvolutionX first test
           if [ "$MTE" = "true" ]; then
             echo "CONFIG_ARM64_MTE=y" >> "$DF"
-            echo ">>> MTE enabled (HyperOS variant)"
+            echo ">>> MTE enabled (HyperOS)"
           else
-            echo "# CONFIG_ARM64_MTE is not set (EvolutionX compat)" >> "$DF"
-            echo ">>> MTE disabled (EvolutionX variant)"
+            echo "# CONFIG_ARM64_MTE is not set" >> "$DF"
+            echo ">>> MTE disabled (EvolutionX)"
+          fi
+
+          if [ "$VARIANT" = "EvolutionX" ]; then
+            # RANDSTRUCT randomize struct layout → break vendor module KMI
+            # vendor modules EvolutionX compiled dengan layout original
+            # harus disable untuk maintain ABI compatibility
+            echo "# CONFIG_GCC_PLUGIN_RANDSTRUCT is not set" >> "$DF"
+            # STRUCTLEAK_BYREF_ALL juga bisa affect struct size/alignment
+            echo "# CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL is not set" >> "$DF"
+            echo "CONFIG_GCC_PLUGIN_STRUCTLEAK=y" >> "$DF"
+            # SHADOW_CALL_STACK changes calling convention
+            # might affect vendor code compiled without SCS
+            echo "# CONFIG_SHADOW_CALL_STACK is not set" >> "$DF"
+            echo ">>> EvolutionX: RANDSTRUCT + SCS disabled (KMI compat)"
+          else
+            echo "CONFIG_GCC_PLUGIN_RANDSTRUCT=y" >> "$DF"
+            echo "CONFIG_RANDSTRUCT_PERFORMANCE=y" >> "$DF"
+            echo "CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL=y" >> "$DF"
+            echo "CONFIG_SHADOW_CALL_STACK=y" >> "$DF"
+            echo ">>> HyperOS: full GCC plugins enabled"
           fi
 
           if [ "${{ github.event.inputs.enable_susfs }}" = "true" ]; then
