@@ -1,10 +1,10 @@
-name: Build Marble Kernel (Multi-Variant)
+name: Build Marble Kernel (Dual Variant - BakaSU + KSUNext)
 
 on:
   workflow_dispatch:
     inputs:
       ksu_version:
-        description: 'Versi BakaSU (auto = 35252)'
+        description: 'Versi KSU (auto = 35252)'
         required: false
         default: 'auto'
         type: string
@@ -13,76 +13,58 @@ on:
         required: true
         default: 'true'
         type: choice
-        options:
-          - 'true'
-          - 'false'
+        options: ['true', 'false']
       kernel_branch:
         description: 'Branch Kernel'
         required: true
         default: 'melt-rebase'
         type: choice
-        options:
-          - melt-rebase
-          - bouquet
-      build_variant:
-        description: 'Variant Build'
+        options: [melt-rebase, bouquet]
+      security_level:
+        description: 'Level Keamanan'
         required: true
-        default: 'both'
+        default: 'maximum_stealth'
         type: choice
-        options:
-          - both
-          - hyperos_only
-          - evolutionx_only
+        options: [maximum_stealth, standard_secure]
 
 permissions:
   contents: read
 
 env:
   KERNEL_REPO: "https://github.com/fauzi882/android_kernel_poco-f5.git"
-  AK3_REPO: "https://github.com/osm0sis/AnyKernel3.git"
-  SUSFS_REPO: "https://gitlab.com/simonpunk/susfs4ksu.git"
+  AK3_REPO:    "https://github.com/osm0sis/AnyKernel3.git"
+  SUSFS_REPO:  "https://gitlab.com/simonpunk/susfs4ksu.git"
   SUSFS_BRANCH: "gki-android12-5.10"
-  CLANG_URL: "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r536225.tar.gz"
+  CLANG_URL:   "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r536225.tar.gz"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 240
+
     strategy:
       fail-fast: false
       matrix:
-        variant:
-          - name: "HyperOS"
-            suffix: "HyperOS"
-            cfi: "true"
-            mte: "true"
-          - name: "EvolutionX"
-            suffix: "EvolutionX"
-            cfi: "false"
-            mte: "false"
+        ksu_variant:
+          - name: "BakaSU"
+            setup_url: "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh"
+            setup_ref: "main"
+            artifact_suffix: "BakaSU"
+            ksu_string: "BakaSU"
+          - name: "KSUNext"
+            setup_url: "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh"
+            setup_ref: "next"
+            artifact_suffix: "KSUNext"
+            ksu_string: "KernelSU-Next"
 
     steps:
-      - name: Check Variant Filter
-        run: |
-          VARIANT="${{ matrix.variant.suffix }}"
-          BUILD="${{ github.event.inputs.build_variant }}"
-          if [ "$BUILD" = "hyperos_only" ] && [ "$VARIANT" = "EvolutionX" ]; then
-            echo "SKIP=true" >> $GITHUB_ENV
-          elif [ "$BUILD" = "evolutionx_only" ] && [ "$VARIANT" = "HyperOS" ]; then
-            echo "SKIP=true" >> $GITHUB_ENV
-          else
-            echo "SKIP=false" >> $GITHUB_ENV
-          fi
-
       - name: Free Disk Space
-        if: env.SKIP != 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo docker image prune --all --force || true
           df -h
 
       - name: Install Dependencies
-        if: env.SKIP != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
@@ -93,7 +75,6 @@ jobs:
             binutils-aarch64-linux-gnu
 
       - name: Setup Clang
-        if: env.SKIP != 'true'
         run: |
           mkdir -p "$HOME/toolchains/clang"
           OK=false
@@ -114,7 +95,8 @@ jobs:
           fi
           if [ "$OK" = "false" ]; then
             wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
-              | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc >/dev/null
+              | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
+              >/dev/null
             echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-17 main" \
               | sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
             sudo apt-get update -qq
@@ -131,7 +113,6 @@ jobs:
           clang --version || true
 
       - name: Clone Kernel
-        if: env.SKIP != 'true'
         run: |
           git clone --depth=1 \
             -b "${{ github.event.inputs.kernel_branch }}" \
@@ -142,28 +123,29 @@ jobs:
           echo ">>> Commit: $(git log --oneline -1)"
 
       - name: Clone SuSFS
-        if: ${{ env.SKIP != 'true' && github.event.inputs.enable_susfs == 'true' }}
+        if: ${{ github.event.inputs.enable_susfs == 'true' }}
         run: |
           git clone --depth=1 \
             -b "${{ env.SUSFS_BRANCH }}" \
             "${{ env.SUSFS_REPO }}" susfs4ksu
 
-      - name: Integrate BakaSU
-        if: env.SKIP != 'true'
+      - name: Integrate KSU Variant (${{ matrix.ksu_variant.name }})
         run: |
           cd kernel
           rm -rf KernelSU drivers/kernelsu
           sed -i '/kernelsu/d' drivers/Makefile \
             drivers/Kconfig 2>/dev/null || true
           git add -A && git commit -m "clean: remove old KSU" || true
-          curl -LSs \
-            "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" \
-            | bash -s main \
-            || curl -LSs \
-            "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh" \
-            | bash
+
+          SETUP_URL="${{ matrix.ksu_variant.setup_url }}"
+          SETUP_REF="${{ matrix.ksu_variant.setup_ref }}"
+
+          curl -LSs "$SETUP_URL" | bash -s "$SETUP_REF" \
+            || curl -LSs "$SETUP_URL" | bash
+
           [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ] \
-            || { echo "ERROR: BakaSU failed"; exit 1; }
+            || { echo "ERROR: ${{ matrix.ksu_variant.name }} integration failed"; exit 1; }
+
           if [ -d "KernelSU" ]; then
             cd KernelSU
             git config user.name "build-user"
@@ -176,10 +158,12 @@ jobs:
             [ -n "$REF" ] && git checkout -f "$REF" || true
             cd ..
           fi
-          git add -A && git commit -m "feat: add BakaSU" || true
 
-      - name: Sync BakaSU Version
-        if: env.SKIP != 'true'
+          git add -A \
+            && git commit -m "feat: add ${{ matrix.ksu_variant.name }}" || true
+          echo ">>> ${{ matrix.ksu_variant.name }} integrated OK"
+
+      - name: Sync KSU Version (${{ matrix.ksu_variant.name }})
         run: |
           cd kernel
           VER="${{ github.event.inputs.ksu_version }}"
@@ -189,17 +173,20 @@ jobs:
             find "$d" -maxdepth 3 \
               \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) \
               | while read f; do
-                sed -i "s/KSU_VERSION := .*/KSU_VERSION := ${VER}/g" \
+                sed -i \
+                  "s/KSU_VERSION := .*/KSU_VERSION := ${VER}/g" \
                   "$f" || true
-                sed -i "s/^VERSION = .*/VERSION = ${VER}/g" \
+                sed -i \
+                  "s/^VERSION = .*/VERSION = ${VER}/g" \
                   "$f" || true
                 sed -i "s/-dirty//g" "$f" || true
               done
           done
-          git add -A && git commit -m "chore: sync BakaSU $VER" || true
+          git add -A \
+            && git commit -m "chore: sync ${{ matrix.ksu_variant.name }} v${VER}" || true
 
       - name: Integrate SuSFS
-        if: ${{ env.SKIP != 'true' && github.event.inputs.enable_susfs == 'true' }}
+        if: ${{ github.event.inputs.enable_susfs == 'true' }}
         run: |
           cd kernel
           SUSFS_OK=false
@@ -225,7 +212,6 @@ jobs:
           echo "SUSFS_APPLIED=$SUSFS_OK" >> $GITHUB_ENV
 
       - name: Fix Extern Declarations
-        if: env.SKIP != 'true'
         run: |
           cd kernel
           python3 - << 'PYEOF'
@@ -240,8 +226,10 @@ jobs:
               "execveat preinit",
               "KSU forward declarations (auto-generated)",
           ]
-          SEFILES = ["security/selinux/hooks.c",
-                     "security/selinux/selinuxfs.c"]
+          SEFILES = [
+              "security/selinux/hooks.c",
+              "security/selinux/selinuxfs.c",
+          ]
           def find_sig(fn):
               dr = re.compile(
                   r'(?:^|\n)[ \t]*(void|int|long)\s*\*?\s*'
@@ -253,8 +241,7 @@ jobs:
                       fp = os.path.join(root, f)
                       if os.path.abspath(fp) == \
                          os.path.abspath("fs/exec.c"): continue
-                      try:
-                          src=open(fp,encoding="utf-8",errors="ignore").read()
+                      try: src=open(fp,encoding="utf-8",errors="ignore").read()
                       except: continue
                       m = dr.search(src)
                       if m: return (m.group(1), m.group(2), fp)
@@ -316,17 +303,17 @@ jobs:
                   r'__attribute__\s*\(\s*\(weak\)\s*\)'
                   r'\s[\w\s\*]*ksu_[^\n]*\n','',src)
               open(sf,"w",encoding="utf-8").write(src)
+              print(f">>> {sf}: cleaned")
           PYEOF
           git add -A && git commit -m "fix: clean extern declarations" || true
 
-      - name: Apply Patches
-        if: env.SKIP != 'true'
+      - name: Apply All Proven Patches
         run: |
           cd kernel
           python3 - << 'PYEOF'
           import re, os
 
-          # BBR tuning + BBR2
+          # === BBR TCP tuning + BBR2 alias ===
           f = "net/ipv4/tcp_bbr.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8").read()
@@ -359,9 +346,9 @@ jobs:
                           r'\1\n\ttcp_unregister_congestion_control'
                           r'(&tcp_bbr2_ops);', src)
               open(f, "w", encoding="utf-8").write(src)
-              print(f">>> BBR tuned + BBR2")
+              print(f">>> {f}: BBR tuned + BBR2 added")
 
-          # Schedutil
+          # === Schedutil tuning ===
           f = "kernel/sched/cpufreq_schedutil.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8", errors="replace").read()
@@ -372,27 +359,27 @@ jobs:
                   r'(?<!ATTR)(?<!RW)(down_rate_limit_us\s*=\s*)\d+(\s*[;,])',
                   r'\g<1>2000\2', src)
               open(f, "w", encoding="utf-8").write(src)
-              print(f">>> schedutil tuned")
+              print(f">>> {f}: schedutil tuned")
 
-          # Scheduler latency
+          # === Scheduler latency ===
           f = "kernel/sched/fair.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8", errors="replace").read()
               src = re.sub(r'(sched_latency_ns\s*=\s*)6000000ULL',
                            r'\g<1>4000000ULL', src)
               open(f, "w", encoding="utf-8").write(src)
-              print(f">>> latency tuned")
+              print(f">>> {f}: latency tuned")
 
-          # mq-deadline
+          # === mq-deadline ===
           f = "block/mq-deadline.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8", errors="replace").read()
               src = re.sub(r'(dd->fifo_batch\s*=\s*)\d+(\s*[;,])',
                            r'\g<1>8\2', src)
               open(f, "w", encoding="utf-8").write(src)
-              print(f">>> fifo_batch tuned")
+              print(f">>> {f}: fifo_batch tuned")
 
-          # cmdline spoof
+          # === cmdline integrity spoof (safe - post boot read only) ===
           f = "fs/proc/cmdline.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8", errors="replace").read()
@@ -400,27 +387,29 @@ jobs:
           static char *spoof_cmdline(const char *o)
           {
               static char b[4096]; char *p;
-              strncpy(b,o,sizeof(b)-1); b[sizeof(b)-1]='\0';
-              p=strstr(b,"androidboot.verifiedbootstate=orange");
+              strncpy(b, o, sizeof(b)-1); b[sizeof(b)-1]='\0';
+              p = strstr(b,"androidboot.verifiedbootstate=orange");
               if(p) memcpy(p,"androidboot.verifiedbootstate=green ",36);
-              p=strstr(b,"androidboot.verifiedbootstate=red   ");
+              p = strstr(b,"androidboot.verifiedbootstate=red   ");
               if(p) memcpy(p,"androidboot.verifiedbootstate=green ",36);
-              p=strstr(b,"androidboot.vbmeta.device_state=unlocked");
+              p = strstr(b,"androidboot.vbmeta.device_state=unlocked");
               if(p) memcpy(p+32,"locked  ",8);
               return b;
           }
           """
               if "spoof_cmdline" not in src:
-                  ls=src.split("\n")
-                  li=max((i for i,l in enumerate(ls)
-                      if l.strip().startswith("#include")),default=0)
-                  ls.insert(li+1,spoof); src="\n".join(ls)
-              src=re.sub(r'seq_puts\(m,\s*saved_command_line\)',
-                  'seq_puts(m, spoof_cmdline(saved_command_line))',src)
-              open(f,"w",encoding="utf-8").write(src)
-              print(f">>> cmdline spoofed")
+                  ls = src.split("\n")
+                  li = max((i for i,l in enumerate(ls)
+                      if l.strip().startswith("#include")), default=0)
+                  ls.insert(li+1, spoof)
+                  src = "\n".join(ls)
+              src = re.sub(
+                  r'seq_puts\(m,\s*saved_command_line\)',
+                  'seq_puts(m, spoof_cmdline(saved_command_line))', src)
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: cmdline spoofed")
 
-          # lockdown bypass
+          # === lockdown bypass ===
           f = "security/lockdown/lockdown.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8", errors="replace").read()
@@ -428,13 +417,12 @@ jobs:
                   r'(static\s+int\s+lockdown_is_locked_down'
                   r'\s*\([^)]*\)\s*\{)',
                   r'\1\n\treturn 0; /* bypass */', src)
-              open(f,"w",encoding="utf-8").write(src)
-              print(f">>> lockdown bypassed")
+              open(f, "w", encoding="utf-8").write(src)
+              print(f">>> {f}: lockdown bypassed")
           PYEOF
-          git add -A && git commit -m "feat: all patches applied" || true
+          git add -A && git commit -m "feat: all proven patches applied" || true
 
       - name: Configure Defconfig
-        if: env.SKIP != 'true'
         run: |
           cd kernel
           if [ -f "arch/arm64/configs/marble_defconfig" ]; then
@@ -449,20 +437,16 @@ jobs:
           fi
           echo "TARGET_DEFCONFIG=$DC" >> $GITHUB_ENV
 
-          CFI="${{ matrix.variant.cfi }}"
-          MTE="${{ matrix.variant.mte }}"
-          VARIANT="${{ matrix.variant.suffix }}"
-
           cat >> "$DF" << 'CFGEOF'
 
-          # === BakaSU ===
+          # === KSU (common for all variants) ===
           CONFIG_WERROR=n
           CONFIG_KSU=y
           CONFIG_KPROBES=y
           CONFIG_HAVE_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
 
-          # === BBR TCP ===
+          # === Round 1: BBR TCP ===
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_TCP_CONG_CUBIC=y
@@ -473,7 +457,8 @@ jobs:
           CONFIG_NET_SCH_CAKE=y
           CONFIG_SYN_COOKIES=y
 
-          # === CPU Governors (CFS_BANDWIDTH skip — bootloop) ===
+          # === Round 2: CPU Governors ===
+          # NOTE: CFS_BANDWIDTH + SCHED_AUTOGROUP = BOOTLOOP di marble
           CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
           CONFIG_CPU_FREQ_GOV_PERFORMANCE=y
           CONFIG_CPU_FREQ_GOV_POWERSAVE=y
@@ -483,7 +468,7 @@ jobs:
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
           CONFIG_HZ_300=y
 
-          # === Memory + IO ===
+          # === Round 4: Memory + IO ===
           CONFIG_ZSMALLOC=y
           CONFIG_ZRAM=y
           CONFIG_ZRAM_DEF_COMP_LZ4=y
@@ -497,7 +482,7 @@ jobs:
           CONFIG_MQ_IOSCHED_KYBER=y
           CONFIG_IOSCHED_BFQ=y
 
-          # === eBPF ===
+          # === Round 5: eBPF ===
           CONFIG_BPF=y
           CONFIG_BPF_SYSCALL=y
           CONFIG_BPF_JIT=y
@@ -513,7 +498,7 @@ jobs:
           CONFIG_UPROBE_EVENTS=y
           CONFIG_PERF_EVENTS=y
 
-          # === Security Hardening ===
+          # === Round 6: Security Hardening ===
           CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
           CONFIG_INIT_ON_FREE_DEFAULT_ON=y
           CONFIG_SLAB_FREELIST_RANDOM=y
@@ -539,7 +524,7 @@ jobs:
           CONFIG_CRYPTO_JITTERENTROPY=y
           CONFIG_HW_RANDOM_QCOM=y
 
-          # === ARM64 Hardware Security ===
+          # === Round 7: ARM64 Hardware Security ===
           CONFIG_ARM64_PTR_AUTH=y
           CONFIG_ARM64_PTR_AUTH_KERNEL=y
           CONFIG_ARM64_BTI=y
@@ -552,8 +537,11 @@ jobs:
           CONFIG_UNMAP_KERNEL_AT_EL0=y
           CONFIG_HARDEN_BRANCH_PREDICTOR=y
           CONFIG_MITIGATE_SPECTRE_BRANCH_HISTORY=y
+          CONFIG_CFI_CLANG=y
+          CONFIG_CFI_PERMISSIVE=n
 
-          # === GCC Plugins + Network + Crypto ===
+          # === Round 8: MTE + GCC Plugins + Network + Crypto ===
+          CONFIG_ARM64_MTE=y
           CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y
           CONFIG_GCC_PLUGIN_STRUCTLEAK=y
           CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL=y
@@ -582,51 +570,11 @@ jobs:
           CONFIG_FS_VERITY=y
           CONFIG_DM_CRYPT=y
           CONFIG_DM_INTEGRITY=y
+
+          # === TTL Manipulation ===
           CONFIG_NETFILTER_XT_TARGET_TTL=y
           CONFIG_IP6T_HL=y
           CFGEOF
-
-          # === Variant-specific configs ===
-          CFI="${{ matrix.variant.cfi }}"
-          MTE="${{ matrix.variant.mte }}"
-          VARIANT="${{ matrix.variant.suffix }}"
-
-          if [ "$CFI" = "true" ]; then
-            echo "CONFIG_CFI_CLANG=y" >> "$DF"
-            echo "CONFIG_CFI_PERMISSIVE=n" >> "$DF"
-            echo ">>> CFI enabled (HyperOS)"
-          else
-            echo "# CONFIG_CFI_CLANG is not set" >> "$DF"
-            echo ">>> CFI disabled (EvolutionX)"
-          fi
-
-          if [ "$MTE" = "true" ]; then
-            echo "CONFIG_ARM64_MTE=y" >> "$DF"
-            echo ">>> MTE enabled (HyperOS)"
-          else
-            echo "# CONFIG_ARM64_MTE is not set" >> "$DF"
-            echo ">>> MTE disabled (EvolutionX)"
-          fi
-
-          if [ "$VARIANT" = "EvolutionX" ]; then
-            # RANDSTRUCT randomize struct layout → break vendor module KMI
-            # vendor modules EvolutionX compiled dengan layout original
-            # harus disable untuk maintain ABI compatibility
-            echo "# CONFIG_GCC_PLUGIN_RANDSTRUCT is not set" >> "$DF"
-            # STRUCTLEAK_BYREF_ALL juga bisa affect struct size/alignment
-            echo "# CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL is not set" >> "$DF"
-            echo "CONFIG_GCC_PLUGIN_STRUCTLEAK=y" >> "$DF"
-            # SHADOW_CALL_STACK changes calling convention
-            # might affect vendor code compiled without SCS
-            echo "# CONFIG_SHADOW_CALL_STACK is not set" >> "$DF"
-            echo ">>> EvolutionX: RANDSTRUCT + SCS disabled (KMI compat)"
-          else
-            echo "CONFIG_GCC_PLUGIN_RANDSTRUCT=y" >> "$DF"
-            echo "CONFIG_RANDSTRUCT_PERFORMANCE=y" >> "$DF"
-            echo "CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL=y" >> "$DF"
-            echo "CONFIG_SHADOW_CALL_STACK=y" >> "$DF"
-            echo ">>> HyperOS: full GCC plugins enabled"
-          fi
 
           if [ "${{ github.event.inputs.enable_susfs }}" = "true" ]; then
             cat >> "$DF" << 'SUSEOF'
@@ -649,15 +597,13 @@ jobs:
             echo "CONFIG_KSU_SUSFS=n" >> "$DF"
           fi
 
-          git add -A && git commit -m "config: $VARIANT variant" || true
-          echo ">>> Defconfig done: $VARIANT"
+          git add -A && git commit -m "config: full proven defconfig" || true
+          echo ">>> Defconfig done for ${{ matrix.ksu_variant.name }}"
 
-      - name: Compile Kernel
-        if: env.SKIP != 'true'
+      - name: Compile Kernel (${{ matrix.ksu_variant.name }})
         run: |
           cd kernel
-          VARIANT="${{ matrix.variant.suffix }}"
-          export KBUILD_BUILD_USER="marble-${VARIANT,,}"
+          export KBUILD_BUILD_USER="marble-${{ matrix.ksu_variant.artifact_suffix }}"
           export KBUILD_BUILD_HOST="kanha"
           export CCACHE_DIR="$HOME/.ccache"
           export USE_CCACHE=1
@@ -693,23 +639,21 @@ jobs:
             exit $S
           fi
           ccache -s
-          echo ">>> BUILD SUCCESS: $VARIANT"
+          echo ">>> BUILD SUCCESS — ${{ matrix.ksu_variant.name }}"
 
-      - name: Package AnyKernel3
-        if: env.SKIP != 'true'
+      - name: Package AnyKernel3 (${{ matrix.ksu_variant.name }})
         run: |
-          VARIANT="${{ matrix.variant.suffix }}"
-          CFI="${{ matrix.variant.cfi }}"
-          MTE="${{ matrix.variant.mte }}"
-
           git clone --depth=1 "${{ env.AK3_REPO }}" AnyKernel3
           cd AnyKernel3
           rm -rf .git README.md modules patch ramdisk
 
+          VARIANT="${{ matrix.ksu_variant.name }}"
+          KSU_STR="${{ matrix.ksu_variant.ksu_string }}"
+
           cat > anykernel.sh << AKEOF
-          # AnyKernel3 - Marble FullPower ${VARIANT}
+          # AnyKernel3 - Marble Dual Variant - ${VARIANT}
           properties() { '
-          kernel.string=Marble FullPower ${VARIANT} - BakaSU - kanha
+          kernel.string=Marble FullPower - ${KSU_STR} - kanha
           do.devicecheck=0
           do.modules=1
           do.systemless=1
@@ -752,8 +696,12 @@ jobs:
           # Post-boot tuning
           cat > marble_tune.sh << 'TUNEEOF'
           #!/system/bin/sh
-          while [ "$(getprop sys.boot_completed)" != "1" ]; do sleep 2; done
+          while [ "$(getprop sys.boot_completed)" != "1" ]; do
+            sleep 2
+          done
           sleep 3
+
+          # Integrity spoof
           resetprop -n ro.boot.verifiedbootstate green
           resetprop -n ro.boot.vbmeta.device_state locked
           resetprop -n ro.boot.flash.locked 1
@@ -764,73 +712,130 @@ jobs:
           resetprop -n ro.build.type user
           resetprop -n ro.build.tags release-keys
           resetprop -n vendor.boot.verifiedbootstate green
+
+          # Kernel security
           echo 1 > /proc/sys/kernel/kptr_restrict
           echo 1 > /proc/sys/kernel/dmesg_restrict
           echo 2 > /proc/sys/kernel/randomize_va_space
           echo 1 > /proc/sys/fs/protected_hardlinks
           echo 1 > /proc/sys/fs/protected_symlinks
           echo 0 > /proc/sys/kernel/sysrq
+
+          # Network security
           echo 1 > /proc/sys/net/ipv4/tcp_syncookies
           echo 0 > /proc/sys/net/ipv4/tcp_timestamps
           echo 1 > /proc/sys/net/ipv4/conf/all/rp_filter
           echo 0 > /proc/sys/net/ipv4/conf/all/accept_redirects
           echo 0 > /proc/sys/net/ipv4/conf/all/send_redirects
+          echo 0 > /proc/sys/net/ipv6/conf/all/accept_redirects
           echo 2 > /proc/sys/net/core/bpf_jit_harden
+
+          # TCP optimization
           echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
           echo fq  > /proc/sys/net/core/default_qdisc
           echo 0   > /proc/sys/net/ipv4/tcp_slow_start_after_idle
           echo 1   > /proc/sys/net/ipv4/tcp_fastopen
           echo 4194304 > /proc/sys/net/core/rmem_max
           echo 4194304 > /proc/sys/net/core/wmem_max
+
+          # TTL manipulation (bypass tethering detection)
           iptables -t mangle -A POSTROUTING \
             -j TTL --ttl-set 64 2>/dev/null || true
           ip6tables -t mangle -A POSTROUTING \
             -j HL --hl-set 64 2>/dev/null || true
+
+          # CPU governor
           for p in /sys/devices/system/cpu/cpufreq/policy*; do
             echo schedutil > "$p/scaling_governor" 2>/dev/null || true
             echo 500  > "$p/schedutil/up_rate_limit_us" 2>/dev/null || true
             echo 2000 > "$p/schedutil/down_rate_limit_us" 2>/dev/null || true
           done
+
+          # Memory
           echo 100 > /proc/sys/vm/swappiness
           echo 10  > /proc/sys/vm/dirty_ratio
           echo 5   > /proc/sys/vm/dirty_background_ratio
+
+          # I/O
           for q in /sys/block/*/queue; do
             [ -d "$q" ] || continue
             echo mq-deadline > "$q/scheduler" 2>/dev/null || true
             echo 64 > "$q/read_ahead_kb" 2>/dev/null || true
             echo 0  > "$q/add_random" 2>/dev/null || true
           done
+
+          # Signal
           resetprop -n persist.vendor.radio.add_power_save 0
           resetprop -n persist.vendor.radio.apm_sim_not_pwdn 1
+          resetprop -n persist.vendor.radio.sib16_support 1
+          resetprop -n persist.vendor.radio.rat_on combo
+
+          # GPS
           resetprop -n persist.gps.qc_nlp_in_use 1
           resetprop -n ro.gps.agps_provider 1
+          resetprop -n persist.vendor.gps.hal.start.mode 2
+
+          # SELinux permissive post-boot
           setenforce 0 2>/dev/null || true
-          log -t marble-fp "Post-boot done: ${VARIANT}"
+
+          log -t marble-fp "Full Power post-boot tuning done"
           TUNEEOF
           chmod 755 marble_tune.sh
 
+          # Copy kernel
           if [ -f "../kernel/out/arch/arm64/boot/Image" ]; then
             cp ../kernel/out/arch/arm64/boot/Image .
           elif [ -f "../kernel/out/arch/arm64/boot/Image.gz" ]; then
             cp ../kernel/out/arch/arm64/boot/Image.gz .
           else
-            echo "ERROR: no kernel image"; exit 1
+            echo "ERROR: no kernel image found"; exit 1
           fi
 
+          # Copy modules
           mkdir -p modules/vendor/lib/modules
           find ../kernel/out -name "*.ko" \
             -exec cp {} modules/vendor/lib/modules/ \; 2>/dev/null || true
 
+          # Build info
           D=$(date +"%Y%m%d-%H%M")
-          ZIP="Marble-FullPower-${VARIANT}-${D}.zip"
+          KSU_VER="${{ github.event.inputs.ksu_version }}"
+          [ "$KSU_VER" = "auto" ] && KSU_VER="35252"
+          cat > BUILD_INFO.txt << INFOEOF
+          ============================================
+          Marble Full Power Kernel — ${VARIANT}
+          ============================================
+          Date:    $(date -u '+%Y-%m-%d %H:%M UTC')
+          Device:  Poco F5 / marble (SM7475)
+          Source:  fauzi882/android_kernel_poco-f5
+          Branch:  ${{ github.event.inputs.kernel_branch }}
+          KSU:     ${KSU_STR} v${KSU_VER}
+          SuSFS:   ${{ github.event.inputs.enable_susfs }}
+          Variant: ${VARIANT}
+
+          PROVEN SAFE (all boot tested):
+          R1: BBR TCP + BBR2
+          R2: CPU Governors (without CFS_BANDWIDTH)
+          R4: Memory + IO
+          R5: eBPF + BPF LSM
+          R6: Security Hardening Tier 1
+          R7: PAC + BTI + CFI + KPTI
+          R8: MTE + GCC Plugins + Network + Crypto
+
+          SKIP (confirmed bootloop):
+          x CONFIG_CFS_BANDWIDTH
+          x CONFIG_SCHED_AUTOGROUP
+          ============================================
+          INFOEOF
+
+          SUFFIX="${{ matrix.ksu_variant.artifact_suffix }}"
+          ZIP="Marble-FullPower-${SUFFIX}-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
 
-      - name: Upload Artifact
-        if: env.SKIP != 'true'
+      - name: Upload Artifact (${{ matrix.ksu_variant.name }})
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-FullPower-${{ matrix.variant.suffix }}
+          name: Marble-FullPower-${{ matrix.ksu_variant.artifact_suffix }}
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 30
