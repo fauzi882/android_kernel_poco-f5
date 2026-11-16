@@ -137,11 +137,22 @@ jobs:
             drivers/Kconfig 2>/dev/null || true
           git add -A && git commit -m "clean: remove old KSU" || true
 
-          SETUP_URL="${{ matrix.ksu_variant.setup_url }}"
-          SETUP_REF="${{ matrix.ksu_variant.setup_ref }}"
-
-          curl -LSs "$SETUP_URL" | bash -s "$SETUP_REF" \
-            || curl -LSs "$SETUP_URL" | bash
+          if [ "${{ matrix.ksu_variant.name }}" = "KSUNext" ]; then
+            # KSUNext: setup.sh URL doesn't exist → direct git clone
+            git clone --depth=1 -b next \
+              https://github.com/rifsxd/KernelSU-Next.git KernelSU
+            ln -sf ../../KernelSU/kernel drivers/kernelsu || true
+            grep -q "kernelsu" drivers/Makefile 2>/dev/null \
+              || echo 'obj-y += kernelsu/' >> drivers/Makefile
+            grep -q "kernelsu" drivers/Kconfig 2>/dev/null \
+              || printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
+          else
+            # BakaSU (and any future variants): use setup.sh
+            SETUP_URL="${{ matrix.ksu_variant.setup_url }}"
+            SETUP_REF="${{ matrix.ksu_variant.setup_ref }}"
+            curl -LSs "$SETUP_URL" | bash -s "$SETUP_REF" \
+              || curl -LSs "$SETUP_URL" | bash
+          fi
 
           [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ] \
             || { echo "ERROR: ${{ matrix.ksu_variant.name }} integration failed"; exit 1; }
@@ -419,6 +430,18 @@ jobs:
                   r'\1\n\treturn 0; /* bypass */', src)
               open(f, "w", encoding="utf-8").write(src)
               print(f">>> {f}: lockdown bypassed")
+
+          # === selinux_hide_init_setxattr stub (BakaSU/KSU compat) ===
+          f = "security/selinux/hooks.c"
+          if os.path.isfile(f):
+              src = open(f, encoding="utf-8", errors="replace").read()
+              if "selinux_hide_init_setxattr" not in src:
+                  stub  = '\n/* KSU/BakaSU compat: selinux_hide stub */\n'
+                  stub += 'void selinux_hide_init_setxattr(void) { }\n'
+                  stub += 'EXPORT_SYMBOL(selinux_hide_init_setxattr);\n'
+                  src += stub
+                  open(f, "w", encoding="utf-8").write(src)
+                  print(f">>> {f}: selinux_hide_init_setxattr stub added")
           PYEOF
           git add -A && git commit -m "feat: all proven patches applied" || true
 
