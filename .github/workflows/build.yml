@@ -1,4 +1,4 @@
-name: Build Marble Kernel (Dual Variant - BakaSU + KSUNext)
+name: Build Marble Kernel (Single Variant - BakaSU / KSUNext)
 
 on:
   workflow_dispatch:
@@ -26,6 +26,14 @@ on:
         default: 'maximum_stealth'
         type: choice
         options: [maximum_stealth, standard_secure]
+      ksu_variant:
+        description: 'KSU Variant yang akan di-build'
+        required: true
+        default: 'BakaSU'
+        type: choice
+        options:
+          - BakaSU
+          - KSUNext
 
 permissions:
   contents: read
@@ -41,21 +49,6 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 240
-
-    strategy:
-      fail-fast: false
-      matrix:
-        ksu_variant:
-          - name: "BakaSU"
-            setup_url: "https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh"
-            setup_ref: "main"
-            artifact_suffix: "BakaSU"
-            ksu_string: "BakaSU"
-          - name: "KSUNext"
-            setup_url: "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh"
-            setup_ref: "next"
-            artifact_suffix: "KSUNext"
-            ksu_string: "KernelSU-Next"
 
     steps:
       - name: Free Disk Space
@@ -129,7 +122,7 @@ jobs:
             -b "${{ env.SUSFS_BRANCH }}" \
             "${{ env.SUSFS_REPO }}" susfs4ksu
 
-      - name: Integrate KSU Variant (${{ matrix.ksu_variant.name }})
+      - name: Integrate KSU Variant (${{ github.event.inputs.ksu_variant }})
         run: |
           cd kernel
           rm -rf KernelSU drivers/kernelsu
@@ -137,9 +130,9 @@ jobs:
             drivers/Kconfig 2>/dev/null || true
           git add -A && git commit -m "clean: remove old KSU" || true
 
-          if [ "${{ matrix.ksu_variant.name }}" = "KSUNext" ]; then
-            # KSUNext: setup.sh URL doesn't exist → direct git clone
-            git clone --depth=1 -b next \
+          if [ "${{ github.event.inputs.ksu_variant }}" = "KSUNext" ]; then
+            # KSUNext: no setup.sh, default branch is 'dev' (not 'next')
+            git clone --depth=1 -b dev \
               https://github.com/rifsxd/KernelSU-Next.git KernelSU
             ln -sf ../../KernelSU/kernel drivers/kernelsu || true
             grep -q "kernelsu" drivers/Makefile 2>/dev/null \
@@ -147,15 +140,14 @@ jobs:
             grep -q "kernelsu" drivers/Kconfig 2>/dev/null \
               || printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
           else
-            # BakaSU (and any future variants): use setup.sh
-            SETUP_URL="${{ matrix.ksu_variant.setup_url }}"
-            SETUP_REF="${{ matrix.ksu_variant.setup_ref }}"
-            curl -LSs "$SETUP_URL" | bash -s "$SETUP_REF" \
+            # BakaSU: use setup.sh from main branch
+            SETUP_URL="https://raw.githubusercontent.com/Baka-SU/BakaSU/main/kernel/setup.sh"
+            curl -LSs "$SETUP_URL" | bash -s main \
               || curl -LSs "$SETUP_URL" | bash
           fi
 
           [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ] \
-            || { echo "ERROR: ${{ matrix.ksu_variant.name }} integration failed"; exit 1; }
+            || { echo "ERROR: ${{ github.event.inputs.ksu_variant }} integration failed"; exit 1; }
 
           if [ -d "KernelSU" ]; then
             cd KernelSU
@@ -171,10 +163,10 @@ jobs:
           fi
 
           git add -A \
-            && git commit -m "feat: add ${{ matrix.ksu_variant.name }}" || true
-          echo ">>> ${{ matrix.ksu_variant.name }} integrated OK"
+            && git commit -m "feat: add ${{ github.event.inputs.ksu_variant }}" || true
+          echo ">>> ${{ github.event.inputs.ksu_variant }} integrated OK"
 
-      - name: Sync KSU Version (${{ matrix.ksu_variant.name }})
+      - name: Sync KSU Version (${{ github.event.inputs.ksu_variant }})
         run: |
           cd kernel
           VER="${{ github.event.inputs.ksu_version }}"
@@ -194,7 +186,7 @@ jobs:
               done
           done
           git add -A \
-            && git commit -m "chore: sync ${{ matrix.ksu_variant.name }} v${VER}" || true
+            && git commit -m "chore: sync ${{ github.event.inputs.ksu_variant }} v${VER}" || true
 
       - name: Integrate SuSFS
         if: ${{ github.event.inputs.enable_susfs == 'true' }}
@@ -621,12 +613,12 @@ jobs:
           fi
 
           git add -A && git commit -m "config: full proven defconfig" || true
-          echo ">>> Defconfig done for ${{ matrix.ksu_variant.name }}"
+          echo ">>> Defconfig done for ${{ github.event.inputs.ksu_variant }}"
 
-      - name: Compile Kernel (${{ matrix.ksu_variant.name }})
+      - name: Compile Kernel (${{ github.event.inputs.ksu_variant }})
         run: |
           cd kernel
-          export KBUILD_BUILD_USER="marble-${{ matrix.ksu_variant.artifact_suffix }}"
+          export KBUILD_BUILD_USER="marble-${{ github.event.inputs.ksu_variant }}"
           export KBUILD_BUILD_HOST="kanha"
           export CCACHE_DIR="$HOME/.ccache"
           export USE_CCACHE=1
@@ -662,16 +654,20 @@ jobs:
             exit $S
           fi
           ccache -s
-          echo ">>> BUILD SUCCESS — ${{ matrix.ksu_variant.name }}"
+          echo ">>> BUILD SUCCESS — ${{ github.event.inputs.ksu_variant }}"
 
-      - name: Package AnyKernel3 (${{ matrix.ksu_variant.name }})
+      - name: Package AnyKernel3 (${{ github.event.inputs.ksu_variant }})
         run: |
           git clone --depth=1 "${{ env.AK3_REPO }}" AnyKernel3
           cd AnyKernel3
           rm -rf .git README.md modules patch ramdisk
 
-          VARIANT="${{ matrix.ksu_variant.name }}"
-          KSU_STR="${{ matrix.ksu_variant.ksu_string }}"
+          VARIANT="${{ github.event.inputs.ksu_variant }}"
+          if [ "$VARIANT" = "KSUNext" ]; then
+            KSU_STR="KernelSU-Next"
+          else
+            KSU_STR="BakaSU"
+          fi
 
           cat > anykernel.sh << AKEOF
           # AnyKernel3 - Marble Dual Variant - ${VARIANT}
@@ -850,15 +846,15 @@ jobs:
           ============================================
           INFOEOF
 
-          SUFFIX="${{ matrix.ksu_variant.artifact_suffix }}"
+          SUFFIX="${{ github.event.inputs.ksu_variant }}"
           ZIP="Marble-FullPower-${SUFFIX}-${D}.zip"
           zip -r9 "../${ZIP}" * -x "*.git*"
           echo "ZIP_OUTPUT=${ZIP}" >> $GITHUB_ENV
           echo ">>> ZIP: ${ZIP}"
 
-      - name: Upload Artifact (${{ matrix.ksu_variant.name }})
+      - name: Upload Artifact (${{ github.event.inputs.ksu_variant }})
         uses: actions/upload-artifact@v4
         with:
-          name: Marble-FullPower-${{ matrix.ksu_variant.artifact_suffix }}
+          name: Marble-FullPower-${{ github.event.inputs.ksu_variant }}
           path: ${{ env.ZIP_OUTPUT }}
           retention-days: 30
