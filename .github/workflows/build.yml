@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       ksu_version:
-        description: 'Versi KSU (auto = 35252)'
+        description: 'Versi KSU BakaSU (auto = 35252); diabaikan untuk KSUNext'
         required: false
         default: 'auto'
         type: string
       enable_susfs:
-        description: 'Enable SuSFS'
+        description: 'Enable SuSFS (khusus BakaSU; KSUNext memakai LKM dari ksud)'
         required: true
         default: 'true'
         type: choice
@@ -34,6 +34,11 @@ on:
         options:
           - BakaSU
           - KSUNext
+      ksu_next_ref:
+        description: 'KernelSU-Next ref (latest = tag rilis terbaru, dev = branch dev, atau tag/commit)'
+        required: false
+        default: 'latest'
+        type: string
 
 permissions:
   contents: read
@@ -41,6 +46,7 @@ permissions:
 env:
   KERNEL_REPO: "https://github.com/fauzi882/android_kernel_poco-f5.git"
   AK3_REPO:    "https://github.com/osm0sis/AnyKernel3.git"
+  KSUNEXT_REPO: "https://github.com/KernelSU-Next/KernelSU-Next.git"
   SUSFS_REPO:  "https://gitlab.com/simonpunk/susfs4ksu.git"
   SUSFS_BRANCH: "gki-android12-5.10"
   CLANG_URL:   "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r536225.tar.gz"
@@ -116,7 +122,7 @@ jobs:
           echo ">>> Commit: $(git log --oneline -1)"
 
       - name: Clone SuSFS
-        if: ${{ github.event.inputs.enable_susfs == 'true' }}
+        if: ${{ github.event.inputs.enable_susfs == 'true' && github.event.inputs.ksu_variant != 'KSUNext' }}
         run: |
           git clone --depth=1 \
             -b "${{ env.SUSFS_BRANCH }}" \
@@ -131,13 +137,34 @@ jobs:
           git add -A && git commit -m "clean: remove old KSU" || true
 
           if [ "${{ github.event.inputs.ksu_variant }}" = "KSUNext" ]; then
-            # KSUNext: no setup.sh, default branch is 'dev' (not 'next')
-            git clone --depth=1 -b dev \
-              https://github.com/rifsxd/KernelSU-Next.git KernelSU
-            ln -sf ../../KernelSU/kernel drivers/kernelsu || true
+            # KernelSU-Next terbaru (v3.x):
+            #  - repo kanonik KernelSU-Next/KernelSU-Next, default branch 'dev'
+            #  - full clone: KSU_VERSION = 30000 + jumlah commit
+            #  - integrasi in-tree lewat symlink drivers/kernelsu (sama seperti setup.sh)
+            REF="${{ github.event.inputs.ksu_next_ref }}"
+            [ -n "$REF" ] || REF="latest"
+
+            git clone "${{ env.KSUNEXT_REPO }}" KernelSU
+            cd KernelSU
+            git fetch --tags --force
+            if [ "$REF" = "latest" ]; then
+              REF="$(git describe --tags --abbrev=0 2>/dev/null || echo dev)"
+            fi
+            git checkout -f "$REF" 2>/dev/null \
+              || git checkout -f "origin/$REF"
+
+            KSU_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo unknown)"
+            KSU_VER="$((30000 + $(git rev-list --count HEAD)))"
+            cd ..
+            echo "KSU_VER=${KSU_VER}" >> "$GITHUB_ENV"
+            echo "KSU_TAG=${KSU_TAG}" >> "$GITHUB_ENV"
+            echo "KSU_REF=${REF}" >> "$GITHUB_ENV"
+            echo ">>> KernelSU-Next ${KSU_TAG} (${REF}) kernel version ${KSU_VER}"
+
+            ln -sfn ../KernelSU/kernel drivers/kernelsu
             grep -q "kernelsu" drivers/Makefile 2>/dev/null \
-              || echo 'obj-y += kernelsu/' >> drivers/Makefile
-            grep -q "kernelsu" drivers/Kconfig 2>/dev/null \
+              || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+            grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig 2>/dev/null \
               || printf '\nsource "drivers/kernelsu/Kconfig"\n' >> drivers/Kconfig
           else
             # BakaSU: use setup.sh from main branch
@@ -149,7 +176,8 @@ jobs:
           [ -d "KernelSU" ] || [ -d "drivers/kernelsu" ] \
             || { echo "ERROR: ${{ github.event.inputs.ksu_variant }} integration failed"; exit 1; }
 
-          if [ -d "KernelSU" ]; then
+          if [ "${{ github.event.inputs.ksu_variant }}" != "KSUNext" ] \
+             && [ -d "KernelSU" ]; then
             cd KernelSU
             git config user.name "build-user"
             git config user.email "build-user@android"
@@ -167,6 +195,7 @@ jobs:
           echo ">>> ${{ github.event.inputs.ksu_variant }} integrated OK"
 
       - name: Sync KSU Version (${{ github.event.inputs.ksu_variant }})
+        if: ${{ github.event.inputs.ksu_variant != 'KSUNext' }}
         run: |
           cd kernel
           VER="${{ github.event.inputs.ksu_version }}"
@@ -189,7 +218,7 @@ jobs:
             && git commit -m "chore: sync ${{ github.event.inputs.ksu_variant }} v${VER}" || true
 
       - name: Integrate SuSFS
-        if: ${{ github.event.inputs.enable_susfs == 'true' }}
+        if: ${{ github.event.inputs.enable_susfs == 'true' && github.event.inputs.ksu_variant != 'KSUNext' }}
         run: |
           cd kernel
           SUSFS_OK=false
@@ -458,6 +487,7 @@ jobs:
           CONFIG_WERROR=n
           CONFIG_KSU=y
           CONFIG_KPROBES=y
+          CONFIG_KRETPROBES=y
           CONFIG_HAVE_KPROBES=y
           CONFIG_KPROBE_EVENTS=y
 
@@ -591,7 +621,11 @@ jobs:
           CONFIG_IP6T_HL=y
           CFGEOF
 
-          if [ "${{ github.event.inputs.enable_susfs }}" = "true" ]; then
+          if [ "${{ github.event.inputs.ksu_variant }}" = "KSUNext" ]; then
+            # KernelSU-Next v3.x: SuSFS adalah LKM terpisah (susfs_guard_lkm.ko)
+            # yang diunduh/di-load oleh ksud, bukan patch susfs4ksu di kernel.
+            echo "# SuSFS: LKM via ksud (KernelSU-Next)" >> "$DF"
+          elif [ "${{ github.event.inputs.enable_susfs }}" = "true" ]; then
             cat >> "$DF" << 'SUSEOF'
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -665,8 +699,15 @@ jobs:
           VARIANT="${{ github.event.inputs.ksu_variant }}"
           if [ "$VARIANT" = "KSUNext" ]; then
             KSU_STR="KernelSU-Next"
+            KSU_VER="${KSU_VER:-unknown}"
+            KSU_LABEL="${KSU_STR} ${KSU_TAG:-unknown} (ref ${KSU_REF:-unknown}, kernel ${KSU_VER})"
+            SUSFS_INFO="LKM via ksud (enable di manager KernelSU-Next)"
           else
             KSU_STR="BakaSU"
+            KSU_VER="${{ github.event.inputs.ksu_version }}"
+            [ "$KSU_VER" = "auto" ] && KSU_VER="35252"
+            KSU_LABEL="${KSU_STR} v${KSU_VER}"
+            SUSFS_INFO="${{ github.event.inputs.enable_susfs }}"
           fi
 
           cat > anykernel.sh << AKEOF
@@ -817,8 +858,6 @@ jobs:
 
           # Build info
           D=$(date +"%Y%m%d-%H%M")
-          KSU_VER="${{ github.event.inputs.ksu_version }}"
-          [ "$KSU_VER" = "auto" ] && KSU_VER="35252"
           cat > BUILD_INFO.txt << INFOEOF
           ============================================
           Marble Full Power Kernel — ${VARIANT}
@@ -827,8 +866,8 @@ jobs:
           Device:  Poco F5 / marble (SM7475)
           Source:  fauzi882/android_kernel_poco-f5
           Branch:  ${{ github.event.inputs.kernel_branch }}
-          KSU:     ${KSU_STR} v${KSU_VER}
-          SuSFS:   ${{ github.event.inputs.enable_susfs }}
+          KSU:     ${KSU_LABEL}
+          SuSFS:   ${SUSFS_INFO}
           Variant: ${VARIANT}
 
           PROVEN SAFE (all boot tested):
