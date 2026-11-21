@@ -19,13 +19,13 @@ on:
         required: true
         default: 'melt-rebase'
         type: choice
-        options: [melt-rebase, bouquet]
+        options: [melt-rebase]
       security_level:
-        description: 'Level Keamanan'
+        description: 'full_performance = overhead hardening dimatikan; maximum_stealth = hardening penuh'
         required: true
-        default: 'maximum_stealth'
+        default: 'full_performance'
         type: choice
-        options: [maximum_stealth, standard_secure]
+        options: [full_performance, maximum_stealth]
       ksu_variant:
         description: 'KSU Variant yang akan di-build'
         required: true
@@ -72,6 +72,16 @@ jobs:
             pahole python3 rsync unzip wget xz-utils zip zstd \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-marble-${{ github.event.inputs.kernel_branch }}-${{ github.event.inputs.ksu_variant }}-${{ github.event.inputs.security_level }}-${{ github.sha }}
+          restore-keys: |
+            ccache-marble-${{ github.event.inputs.kernel_branch }}-${{ github.event.inputs.ksu_variant }}-${{ github.event.inputs.security_level }}-
+            ccache-marble-${{ github.event.inputs.kernel_branch }}-${{ github.event.inputs.ksu_variant }}-
+            ccache-marble-${{ github.event.inputs.kernel_branch }}-
 
       - name: Setup Clang
         run: |
@@ -345,7 +355,9 @@ jobs:
           python3 - << 'PYEOF'
           import re, os
 
-          # === BBR TCP tuning + BBR2 alias ===
+          # === BBR tuning ===
+          # Tidak ada "bbr2" palsu: 5.10 di sini hanya punya BBRv1.
+          # Alias lama mendaftarkan ops yang identik dengan nama berbeda.
           f = "net/ipv4/tcp_bbr.c"
           if os.path.isfile(f):
               src = open(f, encoding="utf-8").read()
@@ -353,32 +365,8 @@ jobs:
                                 "bbr_min_rtt_win_sec = 5")
               src = src.replace("bbr_probe_rtt_mode_ms = 200",
                                 "bbr_probe_rtt_mode_ms = 100")
-              if "bbr2" not in src:
-                  m = re.search(
-                      r'(static\s+struct\s+tcp_congestion_ops\s+'
-                      r'tcp_bbr_cong_ops\s*[^=]*=\s*\{)([^}]+)(\})',
-                      src, re.DOTALL)
-                  if m:
-                      f2 = re.sub(r'(\.name\s*=\s*)"bbr"',
-                                  r'\1"bbr2"', m.group(2))
-                      bbr2 = (f"\n/* BBR2 alias */\n"
-                          f"static struct tcp_congestion_ops "
-                          f"tcp_bbr2_ops __read_mostly = {{{f2}}};\n")
-                      src = re.sub(
-                          r'(static\s+int\s+__init\s+bbr_register)',
-                          bbr2 + r'\1', src)
-                      src = re.sub(
-                          r'(return\s+tcp_register_congestion_control'
-                          r'\s*\(&tcp_bbr_cong_ops\s*\)\s*;)',
-                          r'tcp_register_congestion_control'
-                          r'(&tcp_bbr2_ops);\n\t\1', src)
-                      src = re.sub(
-                          r'(tcp_unregister_congestion_control'
-                          r'\s*\(&tcp_bbr_cong_ops\s*\)\s*;)',
-                          r'\1\n\ttcp_unregister_congestion_control'
-                          r'(&tcp_bbr2_ops);', src)
               open(f, "w", encoding="utf-8").write(src)
-              print(f">>> {f}: BBR tuned + BBR2 added")
+              print(f">>> {f}: BBRv1 tuned")
 
           # === Schedutil tuning ===
           f = "kernel/sched/cpufreq_schedutil.c"
@@ -513,63 +501,45 @@ jobs:
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=y
           CONFIG_HZ_300=y
 
-          # === Round 4: Memory + IO ===
+          # === Memory + IO ===
           CONFIG_ZSMALLOC=y
           CONFIG_ZRAM=y
           CONFIG_ZRAM_DEF_COMP_LZ4=y
           CONFIG_LZ4_COMPRESS=y
-          CONFIG_ZSWAP=y
-          CONFIG_ZBUD=y
           CONFIG_TRANSPARENT_HUGEPAGE=y
           CONFIG_TRANSPARENT_HUGEPAGE_MADVISE=y
-          CONFIG_KSM=y
           CONFIG_MQ_IOSCHED_DEADLINE=y
           CONFIG_MQ_IOSCHED_KYBER=y
           CONFIG_IOSCHED_BFQ=y
 
-          # === Round 5: eBPF ===
+          # === eBPF ===
           CONFIG_BPF=y
           CONFIG_BPF_SYSCALL=y
           CONFIG_BPF_JIT=y
           CONFIG_BPF_JIT_ALWAYS_ON=y
-          CONFIG_BPF_JIT_DEFAULT_ON=y
           CONFIG_HAVE_EBPF_JIT=y
           CONFIG_BPF_EVENTS=y
           CONFIG_BPF_LSM=y
           CONFIG_SECURITY_BPFLSM=y
           CONFIG_BPF_STREAM_PARSER=y
           CONFIG_CGROUP_BPF=y
-          CONFIG_BPF_RINGBUF=y
           CONFIG_UPROBE_EVENTS=y
           CONFIG_PERF_EVENTS=y
 
-          # === Round 6: Security Hardening ===
-          CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
-          CONFIG_INIT_ON_FREE_DEFAULT_ON=y
+          # === Baseline hardening (murah, aman untuk performa) ===
           CONFIG_SLAB_FREELIST_RANDOM=y
           CONFIG_SLAB_FREELIST_HARDENED=y
-          CONFIG_SHUFFLE_PAGE_ALLOCATOR=y
-          CONFIG_FORTIFY_SOURCE=y
-          CONFIG_HARDENED_USERCOPY=y
           CONFIG_VMAP_STACK=y
-          CONFIG_REFCOUNT_FULL=y
           CONFIG_STACKPROTECTOR=y
           CONFIG_STACKPROTECTOR_STRONG=y
           CONFIG_STRICT_KERNEL_RWX=y
           CONFIG_STRICT_MODULE_RWX=y
           CONFIG_RANDOMIZE_BASE=y
-          CONFIG_PAGE_POISONING=y
-          CONFIG_SECURITY_YAMA=y
           CONFIG_NAMESPACES=y
-          CONFIG_USER_NS=y
           CONFIG_PID_NS=y
           CONFIG_NET_NS=y
-          CONFIG_AUDIT=y
-          CONFIG_AUDITSYSCALL=y
-          CONFIG_CRYPTO_JITTERENTROPY=y
-          CONFIG_HW_RANDOM_QCOM=y
 
-          # === Round 7: ARM64 Hardware Security ===
+          # === Hardware-assisted security (PAC/BTI/CFI/SCS + EPAN) ===
           CONFIG_ARM64_PTR_AUTH=y
           CONFIG_ARM64_PTR_AUTH_KERNEL=y
           CONFIG_ARM64_BTI=y
@@ -579,19 +549,16 @@ jobs:
           CONFIG_ARM64_SW_TTBR0_PAN=y
           CONFIG_ARM64_UAO=y
           CONFIG_ARM64_EPAN=y
-          CONFIG_UNMAP_KERNEL_AT_EL0=y
           CONFIG_HARDEN_BRANCH_PREDICTOR=y
           CONFIG_MITIGATE_SPECTRE_BRANCH_HISTORY=y
           CONFIG_CFI_CLANG=y
           CONFIG_CFI_PERMISSIVE=n
-
-          # === Round 8: MTE + GCC Plugins + Network + Crypto ===
           CONFIG_ARM64_MTE=y
-          CONFIG_GCC_PLUGIN_LATENT_ENTROPY=y
-          CONFIG_GCC_PLUGIN_STRUCTLEAK=y
-          CONFIG_GCC_PLUGIN_STRUCTLEAK_BYREF_ALL=y
-          CONFIG_GCC_PLUGIN_STACKLEAK=y
-          CONFIG_GCC_PLUGIN_RANDSTRUCT=y
+          # KPTI (UNMAP_KERNEL_AT_EL0) sengaja tidak dinyalakan:
+          # SoC ARMv8.2+/ARMv9 tidak terdampak Meltdown dan PAN/EPAN sudah
+          # memblokir akses userspace -> kernel. KPTI murni overhead di sini.
+
+          # === Network + Crypto ===
           CONFIG_NETFILTER=y
           CONFIG_NF_CONNTRACK=y
           CONFIG_NF_TABLES=y
@@ -620,6 +587,45 @@ jobs:
           CONFIG_NETFILTER_XT_TARGET_TTL=y
           CONFIG_IP6T_HL=y
           CFGEOF
+
+          SECURITY_LEVEL="${{ github.event.inputs.security_level }}"
+          if [ "$SECURITY_LEVEL" = "maximum_stealth" ]; then
+            cat >> "$DF" << 'STEALTHEOF'
+
+          # === Profil maximum_stealth: hardening penuh ===
+          CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
+          CONFIG_INIT_ON_FREE_DEFAULT_ON=y
+          CONFIG_SHUFFLE_PAGE_ALLOCATOR=y
+          CONFIG_FORTIFY_SOURCE=y
+          CONFIG_HARDENED_USERCOPY=y
+          CONFIG_PAGE_POISONING=y
+          CONFIG_SECURITY_YAMA=y
+          CONFIG_USER_NS=y
+          CONFIG_AUDIT=y
+          CONFIG_AUDITSYSCALL=y
+          CONFIG_CRYPTO_JITTERENTROPY=y
+          CONFIG_HW_RANDOM_QCOM=y
+          STEALTHEOF
+          else
+            cat >> "$DF" << 'PERFEOF'
+
+          # === Profil full_performance: matikan overhead ===
+          # Base defconfig menyalakan INIT_ON_ALLOC; harus ditimpa eksplisit.
+          CONFIG_INIT_ON_ALLOC_DEFAULT_ON=n
+          CONFIG_INIT_ON_FREE_DEFAULT_ON=n
+          CONFIG_SHUFFLE_PAGE_ALLOCATOR=n
+          CONFIG_FORTIFY_SOURCE=n
+          CONFIG_HARDENED_USERCOPY=n
+          CONFIG_PAGE_POISONING=n
+          CONFIG_STACKPROTECTOR_PER_TASK=n
+          # AUDIT harus tetap y: SECURITY_SELINUX depends on AUDIT.
+          CONFIG_AUDITSYSCALL=n
+          CONFIG_KSM=n
+          CONFIG_ZSWAP=n
+          CONFIG_ZBUD=n
+          CONFIG_UNMAP_KERNEL_AT_EL0=n
+          PERFEOF
+          fi
 
           if [ "${{ github.event.inputs.ksu_variant }}" = "KSUNext" ]; then
             # KernelSU-Next v3.x: SuSFS adalah LKM terpisah (susfs_guard_lkm.ko)
@@ -753,25 +759,52 @@ jobs:
           sh "$AKHOME/marble_emergency.sh"
           EMERG
 
+          # Pasang script tuning ke hook root yang dipakai Magisk/KernelSU.
+          # KernelSU-Next menjalankan /data/adb/service.d/* saat on_services,
+          # Magisk menjalankan direktori yang sama di late_start service.
+          cat >> anykernel.sh << 'TUNEHOOK'
+          if [ -d /data/adb ]; then
+            mkdir -p /data/adb/service.d
+            cp "$AKHOME/marble_tune.sh" /data/adb/service.d/marble_fullpower.sh
+            chmod 755 /data/adb/service.d/marble_fullpower.sh
+            ui_print " " "FullPower: tune script installed to /data/adb/service.d"
+          else
+            ui_print " " "FullPower: /data/adb unavailable, script remains in zip"
+          fi
+          TUNEHOOK
+
           # Post-boot tuning
           cat > marble_tune.sh << 'TUNEEOF'
           #!/system/bin/sh
-          while [ "$(getprop sys.boot_completed)" != "1" ]; do
+          SECURITY_LEVEL="__SECURITY_LEVEL__"
+
+          # Tunggu boot selesai, dibatasi 3 menit agar tidak menggantung.
+          i=0
+          while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 90 ]; do
             sleep 2
+            i=$((i + 1))
           done
+          [ "$(getprop sys.boot_completed)" != "1" ] && exit 0
           sleep 3
 
+          # resetprop: PATH (Magisk), ksud (KernelSU-Next), lalu fallback.
+          RP=""
+          command -v resetprop >/dev/null 2>&1 && RP=$(command -v resetprop)
+          [ -z "$RP" ] && [ -x /data/adb/ksu/bin/resetprop ] && RP=/data/adb/ksu/bin/resetprop
+          [ -z "$RP" ] && [ -x /data/adb/magisk/resetprop ] && RP=/data/adb/magisk/resetprop
+          rp() { [ -n "$RP" ] && "$RP" "$@"; return 0; }
+
           # Integrity spoof
-          resetprop -n ro.boot.verifiedbootstate green
-          resetprop -n ro.boot.vbmeta.device_state locked
-          resetprop -n ro.boot.flash.locked 1
-          resetprop -n ro.boot.warranty_bit 0
-          resetprop -n ro.warranty_bit 0
-          resetprop -n ro.debuggable 0
-          resetprop -n ro.secure 1
-          resetprop -n ro.build.type user
-          resetprop -n ro.build.tags release-keys
-          resetprop -n vendor.boot.verifiedbootstate green
+          rp -n ro.boot.verifiedbootstate green
+          rp -n ro.boot.vbmeta.device_state locked
+          rp -n ro.boot.flash.locked 1
+          rp -n ro.boot.warranty_bit 0
+          rp -n ro.warranty_bit 0
+          rp -n ro.debuggable 0
+          rp -n ro.secure 1
+          rp -n ro.build.type user
+          rp -n ro.build.tags release-keys
+          rp -n vendor.boot.verifiedbootstate green
 
           # Kernel security
           echo 1 > /proc/sys/kernel/kptr_restrict
@@ -788,24 +821,32 @@ jobs:
           echo 0 > /proc/sys/net/ipv4/conf/all/accept_redirects
           echo 0 > /proc/sys/net/ipv4/conf/all/send_redirects
           echo 0 > /proc/sys/net/ipv6/conf/all/accept_redirects
-          echo 2 > /proc/sys/net/core/bpf_jit_harden
+          if [ "$SECURITY_LEVEL" = "maximum_stealth" ]; then
+            echo 2 > /proc/sys/net/core/bpf_jit_harden
+            setenforce 0 2>/dev/null || true
+          else
+            echo 0 > /proc/sys/net/core/bpf_jit_harden
+          fi
 
-          # TCP optimization
+          # TCP optimization (BBRv1)
           echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
           echo fq  > /proc/sys/net/core/default_qdisc
           echo 0   > /proc/sys/net/ipv4/tcp_slow_start_after_idle
           echo 1   > /proc/sys/net/ipv4/tcp_fastopen
           echo 4194304 > /proc/sys/net/core/rmem_max
           echo 4194304 > /proc/sys/net/core/wmem_max
+          echo "4096 1048576 4194304" > /proc/sys/net/ipv4/tcp_rmem
+          echo "4096 1048576 4194304" > /proc/sys/net/ipv4/tcp_wmem
 
-          # TTL manipulation (bypass tethering detection)
-          iptables -t mangle -A POSTROUTING \
-            -j TTL --ttl-set 64 2>/dev/null || true
-          ip6tables -t mangle -A POSTROUTING \
-            -j HL --hl-set 64 2>/dev/null || true
+          # TTL manipulation (bypass tethering detection); -C cegah duplikat
+          iptables -t mangle -C POSTROUTING -j TTL --ttl-set 64 2>/dev/null \
+            || iptables -t mangle -A POSTROUTING -j TTL --ttl-set 64 2>/dev/null || true
+          ip6tables -t mangle -C POSTROUTING -j HL --hl-set 64 2>/dev/null \
+            || ip6tables -t mangle -A POSTROUTING -j HL --hl-set 64 2>/dev/null || true
 
           # CPU governor
           for p in /sys/devices/system/cpu/cpufreq/policy*; do
+            [ -d "$p" ] || continue
             echo schedutil > "$p/scaling_governor" 2>/dev/null || true
             echo 500  > "$p/schedutil/up_rate_limit_us" 2>/dev/null || true
             echo 2000 > "$p/schedutil/down_rate_limit_us" 2>/dev/null || true
@@ -815,32 +856,36 @@ jobs:
           echo 100 > /proc/sys/vm/swappiness
           echo 10  > /proc/sys/vm/dirty_ratio
           echo 5   > /proc/sys/vm/dirty_background_ratio
+          echo 50  > /proc/sys/vm/vfs_cache_pressure
+          echo 20  > /proc/sys/vm/watermark_scale_factor
+          MFK=$(awk '/MemTotal/ { print int($2 * 0.003) }' /proc/meminfo)
+          [ -n "$MFK" ] && [ "$MFK" -gt 4096 ] && \
+            echo "$MFK" > /proc/sys/vm/min_free_kbytes 2>/dev/null || true
 
           # I/O
           for q in /sys/block/*/queue; do
             [ -d "$q" ] || continue
             echo mq-deadline > "$q/scheduler" 2>/dev/null || true
-            echo 64 > "$q/read_ahead_kb" 2>/dev/null || true
-            echo 0  > "$q/add_random" 2>/dev/null || true
+            echo 128 > "$q/read_ahead_kb" 2>/dev/null || true
+            echo 64  > "$q/nr_requests" 2>/dev/null || true
+            echo 0   > "$q/add_random" 2>/dev/null || true
           done
 
           # Signal
-          resetprop -n persist.vendor.radio.add_power_save 0
-          resetprop -n persist.vendor.radio.apm_sim_not_pwdn 1
-          resetprop -n persist.vendor.radio.sib16_support 1
-          resetprop -n persist.vendor.radio.rat_on combo
+          rp -n persist.vendor.radio.add_power_save 0
+          rp -n persist.vendor.radio.apm_sim_not_pwdn 1
+          rp -n persist.vendor.radio.sib16_support 1
+          rp -n persist.vendor.radio.rat_on combo
 
           # GPS
-          resetprop -n persist.gps.qc_nlp_in_use 1
-          resetprop -n ro.gps.agps_provider 1
-          resetprop -n persist.vendor.gps.hal.start.mode 2
+          rp -n persist.gps.qc_nlp_in_use 1
+          rp -n ro.gps.agps_provider 1
+          rp -n persist.vendor.gps.hal.start.mode 2
 
-          # SELinux permissive post-boot
-          setenforce 0 2>/dev/null || true
-
-          log -t marble-fp "Full Power post-boot tuning done"
+          log -t marble-fp "FullPower tuning done (${SECURITY_LEVEL})"
           TUNEEOF
           chmod 755 marble_tune.sh
+          sed -i "s|__SECURITY_LEVEL__|${{ github.event.inputs.security_level }}|" marble_tune.sh
 
           # Copy kernel
           if [ -f "../kernel/out/arch/arm64/boot/Image" ]; then
@@ -869,15 +914,17 @@ jobs:
           KSU:     ${KSU_LABEL}
           SuSFS:   ${SUSFS_INFO}
           Variant: ${VARIANT}
+          Profile: ${{ github.event.inputs.security_level }}
+          Tuning:  /data/adb/service.d/marble_fullpower.sh (auto saat boot)
 
-          PROVEN SAFE (all boot tested):
-          R1: BBR TCP + BBR2
-          R2: CPU Governors (without CFS_BANDWIDTH)
-          R4: Memory + IO
-          R5: eBPF + BPF LSM
-          R6: Security Hardening Tier 1
-          R7: PAC + BTI + CFI + KPTI
-          R8: MTE + GCC Plugins + Network + Crypto
+          FEATURES:
+          - BBRv1 tuned, fq/cake, schedutil, mq-deadline/kyber/bfq
+          - eBPF + BPF LSM, WireGuard, TTL mangle
+          - PAC + BTI + CFI + SCS + EPAN (KPTI OFF, PAN/EPAN cukup)
+          - ZRAM LZ4 + THP (zswap/KSM mati di profil performa)
+
+          SCRIPT PATCHES (proven safe):
+          - net/ipv4/tcp_bbr.c, cpufreq_schedutil.c, fair.c, mq-deadline.c
 
           SKIP (confirmed bootloop):
           x CONFIG_CFS_BANDWIDTH
